@@ -86,6 +86,8 @@ Download the tarball from [Releases](../../releases), then either:
 The hotkey is remappable in **Settings → Keyboard shortcuts**. A CPU chip also
 appears in the top bar on the Kanban and Tasks views, and opens the same panel.
 
+![The panel open over the Kanban board, with the CPU chip in the top bar](docs/media/in-app.png)
+
 ## Cost
 
 Sampling is request-driven: with the panel closed, the plugin does nothing.
