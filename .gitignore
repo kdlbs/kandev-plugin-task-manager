@@ -1,0 +1,7 @@
+bin/
+.build/
+# Local layout harness: a stub host that renders ui/bundle.js without a kandev
+# instance. Its bundled React copy is large and machine-specific.
+.harness/globals.bundle.js
+.harness/*.png
+*.tar.gz

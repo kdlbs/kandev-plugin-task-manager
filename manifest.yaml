@@ -1,0 +1,41 @@
+id: "kandev-plugin-task-manager"
+api_version: 1
+version: "0.8.0"
+display_name: "Task Manager"
+description: "Per-task CPU and memory for running agents — a hotkey task manager over the real host process tree."
+author: "kandev"
+categories: ["tools"]
+repo_url: "https://github.com/kdlbs/kandev-plugin-task-manager"
+
+runtime:
+  type: binary
+  executables:
+    linux-amd64: "server/plugin-linux-amd64"
+    linux-arm64: "server/plugin-linux-arm64"
+    darwin-amd64: "server/plugin-darwin-amd64"
+    darwin-arm64: "server/plugin-darwin-arm64"
+    windows-amd64: "server/plugin-windows-amd64.exe"
+
+# Task titles only. Every process-level number comes from the host kernel
+# (/proc on Linux, ps + sysctl on macOS), not from kandev.
+capabilities:
+  api_read: ["tasks"]
+
+webhooks:
+  - key: "usage"
+    description: "Per-task CPU/memory rollup of the local agent process trees (UI request relay, not an external webhook)"
+    # POST because kandev demands an Origin header on session-authenticated
+    # webhooks, and browsers omit Origin on same-origin GETs.
+    method: "POST"
+    access: "authenticated"
+
+ui:
+  # No `styles:` entry: the bundle injects its own stylesheet, so the UI
+  # cannot render unstyled because a separate asset failed to resolve.
+  bundle: "/ui/bundle.js"
+  keybindings:
+    - id: "open-task-manager"
+      # Ctrl+Shift+Esc on Linux/Windows, Cmd+Shift+Esc on macOS.
+      # Remappable in Settings > Keyboard shortcuts.
+      default: "mod+shift+escape"
+      description: "Open the per-task CPU / memory task manager"

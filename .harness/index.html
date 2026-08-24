@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Task Manager harness</title>
+    <!-- The subset of kandev's theme tokens the plugin styles against, so the
+         harness renders with the same colors the real host supplies. -->
+    <style>
+      :root {
+        --background: oklch(0.145 0 0);
+        --foreground: oklch(0.985 0 0);
+        --muted: #2a2a2a;
+        --muted-foreground: oklch(0.708 0 0);
+        --border: oklch(1 0 0 / 12%);
+        --ring: oklch(0.59 0.2 277);
+        --primary: oklch(0.59 0.2 277);
+        --destructive: oklch(0.704 0.191 22.216);
+      }
+      body.light {
+        --background: oklch(1 0 0);
+        --foreground: oklch(0.145 0 0);
+        --muted: oklch(0.97 0 0);
+        --muted-foreground: oklch(0.556 0 0);
+        --border: oklch(0.922 0 0);
+        --destructive: oklch(0.58 0.22 27);
+      }
+      body {
+        margin: 0;
+        padding: 2rem;
+        background: var(--background);
+        color: var(--foreground);
+        font-family:
+          ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      /* Mirrors the host's DialogContent exactly, copied from
+         apps/packages/ui/src/dialog.tsx:
+           "grid max-w-[calc(100%-2rem)] gap-4 rounded-lg border p-4
+            text-xs/relaxed ... w-full" + the size class (lg -> sm:max-w-3xl).
+
+         `display: grid` is the part that matters and the part this harness
+         previously got wrong by using a plain block. A grid item defaults to
+         min-width: auto, so it refuses to shrink below its content's
+         min-content width and overflows the dialog — a block child shrinks
+         instead, which is why the harness reported zero overflow while the
+         real app overflowed badly. */
+      * {
+        box-sizing: border-box;
+      }
+      #dialog {
+        display: grid;
+        gap: 1rem;
+        width: 100%;
+        /* The real DialogContent carries both caps: max-w-[calc(100%-2rem)]
+         * and the size class. Without the first, the harness's own dialog
+         * overflows a narrow viewport and masks the plugin's real number. */
+        max-width: min(48rem, calc(100% - 2rem));
+        margin: 0 auto;
+        padding: 1rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        background: var(--background);
+        font-size: 0.75rem;
+        line-height: 1.625;
+        box-shadow: 0 10px 40px rgb(0 0 0 / 40%);
+      }
+      #modal-title {
+        margin: 0 0 0.75rem;
+        font-size: 1.0625rem;
+        font-weight: 600;
+      }
+      #topbar {
+        max-width: 48rem;
+        margin: 0 auto 1rem;
+        display: flex;
+        justify-content: flex-end;
+      }
+    </style>
+    <!-- Deliberately no stylesheet link: the bundle injects its own, and the
+         harness must exercise exactly what ships. -->
+  </head>
+  <body>
+    <div id="topbar"><div id="chip-slot"></div></div>
+    <div id="dialog">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+    </div>
+    <script src="./globals.bundle.js"></script>
+    <script src="./harness.js"></script>
+    <script src="../ui/bundle.js"></script>
+  </body>
+</html>
