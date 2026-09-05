@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-const diskStatfsTimeout = 2 * time.Second
+const (
+	diskStatfsTimeout  = 2 * time.Second
+	diskStatfsSlotWait = 250 * time.Millisecond
+)
 
 var monitorStatfs = syscall.Statfs
 
@@ -25,10 +28,14 @@ func readUnixDiskCapacity(ctx context.Context, path string) (hostDiskReading, er
 	if path == "" {
 		return hostDiskReading{}, errors.New("disk path is empty")
 	}
+	waitTimer := time.NewTimer(diskStatfsSlotWait)
+	defer waitTimer.Stop()
 	select {
 	case diskCallSlot <- struct{}{}:
 	case <-ctx.Done():
 		return hostDiskReading{}, ctx.Err()
+	case <-waitTimer.C:
+		return hostDiskReading{}, errors.New("filesystem capacity lookup is busy")
 	}
 
 	result := make(chan diskStatfsResult, 1)

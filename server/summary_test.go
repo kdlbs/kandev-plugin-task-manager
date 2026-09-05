@@ -5,9 +5,60 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/kandev/kandev/pkg/pluginsdk"
 )
+
+func TestSummaryDiskReadDoesNotBlockDetailedUsage(t *testing.T) {
+	diskStarted := make(chan struct{}, 1)
+	diskRelease := make(chan struct{})
+	reader := &fakeHostMetricsReader{
+		disk:        hostDiskReading{UsedBytes: 1, TotalBytes: 2},
+		diskStarted: diskStarted,
+		diskRelease: diskRelease,
+	}
+	p := newPlugin()
+	p.hostMetrics = newHostMetricsCollector(reader)
+	p.sampler, _ = newTestSampler(&fakeScanner{
+		tables: [][]procSample{{}},
+	})
+
+	summaryDone := make(chan error, 1)
+	go func() {
+		_, err := p.sampleSummary(context.Background(), summaryRequest{MetricIDs: []string{"disk"}}, defaultMonitorConfig())
+		summaryDone <- err
+	}()
+	select {
+	case <-diskStarted:
+	case <-time.After(time.Second):
+		t.Fatal("disk read did not start")
+	}
+
+	usageDone := make(chan error, 1)
+	go func() {
+		_, err := p.handleUsage(context.Background(), &pluginsdk.WebhookRequest{WebhookKey: "usage", Method: http.MethodPost})
+		usageDone <- err
+	}()
+	select {
+	case err := <-usageDone:
+		if err != nil {
+			t.Fatalf("detailed usage: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("detailed usage was blocked by the disk read")
+	}
+
+	close(diskRelease)
+	select {
+	case err := <-summaryDone:
+		if err != nil {
+			t.Fatalf("summary: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disk summary did not finish after release")
+	}
+}
 
 func TestSummaryWebhookRejectsInvalidSelectors(t *testing.T) {
 	tests := []struct {

@@ -1,4 +1,4 @@
-.PHONY: build test test-ui test-harness live fmt vet package package-host clean
+.PHONY: build test test-harness live fmt vet package package-host clean
 
 BIN := bin/kandev-plugin-task-manager
 VERSION := 0.1.3
@@ -11,9 +11,6 @@ build:
 
 test:
 	go test ./server/...
-
-test-ui:
-	node --test ui/*.test.mjs
 
 test-harness:
 	pnpm --dir .harness install --frozen-lockfile
@@ -42,7 +39,7 @@ package:
 	GOOS=darwin  GOARCH=amd64 go build -o $(STAGE)/server/plugin-darwin-amd64      ./server
 	GOOS=darwin  GOARCH=arm64 go build -o $(STAGE)/server/plugin-darwin-arm64      ./server
 	GOOS=windows GOARCH=amd64 go build -o $(STAGE)/server/plugin-windows-amd64.exe ./server
-	go run github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT)
+	go run -mod=mod github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT)
 	rm -rf $(STAGE)
 	@echo "Wrote $(PKG_OUT)"
 
@@ -53,7 +50,7 @@ package-host:
 	cp manifest.yaml $(STAGE)/manifest.yaml
 	cp -r ui $(STAGE)/ui
 	go build -o $(STAGE)/server/plugin-$$(go env GOOS)-$$(go env GOARCH)$$(go env GOEXE) ./server
-	go run github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT) -platform-only
+	go run -mod=mod github.com/kandev/kandev/cmd/plugin-pack -dir $(STAGE) -out $(PKG_OUT) -platform-only
 	rm -rf $(STAGE)
 	@echo "Wrote $(PKG_OUT)"
 

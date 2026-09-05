@@ -22,17 +22,20 @@ import (
 type taskManagerPlugin struct {
 	pluginsdk.UnimplementedPlugin
 
-	// mu serializes sampling. Two overlapping polls sharing one previous
-	// observation would each diff against it and both report roughly half the
-	// real rate, so the second caller waits and then gets an honest reading.
-	mu      sync.Mutex
+	// cpuMu serializes the two stateful CPU samplers. Two overlapping polls
+	// sharing one previous observation would each diff against it and both
+	// report roughly half the real rate, so the second caller waits and then
+	// gets an honest reading. Host memory, disk, temperature, and load are
+	// independent reads and must not wait behind this lock.
+	cpuMu   sync.Mutex
 	sampler *sampler
 	titles  *titleCache
 
-	configMu     sync.Mutex
-	config       monitorConfig
-	configLoaded bool
-	hostMetrics  *hostMetricsCollector
+	configMu      sync.Mutex
+	config        monitorConfig
+	configLoaded  bool
+	hostMetricsMu sync.Mutex
+	hostMetrics   *hostMetricsCollector
 }
 
 var _ pluginsdk.Plugin = (*taskManagerPlugin)(nil)
@@ -107,9 +110,9 @@ func (p *taskManagerPlugin) handleUsage(ctx context.Context, req *pluginsdk.Webh
 		return jsonError(http.StatusMethodNotAllowed, fmt.Sprintf("method %s not allowed", req.Method))
 	}
 
-	p.mu.Lock()
+	p.cpuMu.Lock()
 	snap, err := p.sampler.sample(ctx)
-	p.mu.Unlock()
+	p.cpuMu.Unlock()
 	if err != nil {
 		// A sampling failure is the plugin's own problem, not the caller's:
 		// report it in the body so the UI can show the reason, and use 200 so
@@ -139,12 +142,16 @@ func (p *taskManagerPlugin) handleSummary(ctx context.Context, req *pluginsdk.We
 		return jsonError(http.StatusInternalServerError, boundedMetricError(err))
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	return p.sampleSummary(ctx, request, config)
+}
+
+func (p *taskManagerPlugin) metricsCollector() *hostMetricsCollector {
+	p.hostMetricsMu.Lock()
+	defer p.hostMetricsMu.Unlock()
 	if p.hostMetrics == nil {
 		p.hostMetrics = newHostMetricsCollector(newHostMetricsReader())
 	}
-	return p.sampleSummary(ctx, request, config)
+	return p.hostMetrics
 }
 
 func decodeSummaryRequest(body []byte) (summaryRequest, error) {
@@ -227,9 +234,7 @@ func (p *taskManagerPlugin) loadMonitorConfig(ctx context.Context) (monitorConfi
 }
 
 func (p *taskManagerPlugin) sampleSummary(ctx context.Context, request summaryRequest, config monitorConfig) (*pluginsdk.WebhookResponse, error) {
-	if p.hostMetrics == nil {
-		p.hostMetrics = newHostMetricsCollector(newHostMetricsReader())
-	}
+	metrics := p.metricsCollector()
 	cores := logicalCPUCores()
 	report := summaryReport{
 		SampledAt:              time.Now().UTC(),
@@ -238,31 +243,45 @@ func (p *taskManagerPlugin) sampleSummary(ctx context.Context, request summaryRe
 		Metrics:                make(map[string]summaryMetric, len(request.MetricIDs)),
 	}
 	for _, id := range request.MetricIDs {
-		report.Metrics[id] = p.sampleSummaryMetric(ctx, id, request.CPUSource, config, cores)
+		report.Metrics[id] = p.sampleSummaryMetricWithCollector(ctx, id, request.CPUSource, config, cores, metrics)
 	}
 	return jsonBody(http.StatusOK, report)
 }
 
+// sampleSummaryMetric keeps the small internal helper useful to callers that
+// only need one metric. The summary request path uses the collector-aware
+// variant so all independent metrics share the same reader instance without
+// extending the CPU lock across the whole request.
 func (p *taskManagerPlugin) sampleSummaryMetric(ctx context.Context, id, cpuSource string, config monitorConfig, cores int) summaryMetric {
+	return p.sampleSummaryMetricWithCollector(ctx, id, cpuSource, config, cores, p.metricsCollector())
+}
+
+func (p *taskManagerPlugin) sampleSummaryMetricWithCollector(ctx context.Context, id, cpuSource string, config monitorConfig, cores int, metrics *hostMetricsCollector) summaryMetric {
 	switch id {
 	case "cpu":
-		return p.sampleSummaryCPU(ctx, cpuSource, cores)
+		return p.sampleSummaryCPUWithCollector(ctx, cpuSource, cores, metrics)
 	case "memory":
-		return p.sampleSummaryMemory()
+		return sampleSummaryMemory(metrics)
 	case "disk":
-		return p.sampleSummaryDisk(ctx, config.DiskPath, config.DiskPathError)
+		return sampleSummaryDisk(ctx, metrics, config.DiskPath, config.DiskPathError)
 	case "cpu_temperature":
-		return p.sampleSummaryTemperature()
+		return sampleSummaryTemperature(metrics)
 	case "system_load":
-		return p.sampleSummaryLoad()
+		return sampleSummaryLoad(metrics)
 	default:
 		return unavailableMetric(errors.New("unsupported summary metric"))
 	}
 }
 
 func (p *taskManagerPlugin) sampleSummaryCPU(ctx context.Context, source string, cores int) summaryMetric {
+	return p.sampleSummaryCPUWithCollector(ctx, source, cores, p.metricsCollector())
+}
+
+func (p *taskManagerPlugin) sampleSummaryCPUWithCollector(ctx context.Context, source string, cores int, metrics *hostMetricsCollector) summaryMetric {
+	p.cpuMu.Lock()
+	defer p.cpuMu.Unlock()
 	if source == "host" {
-		core, relative, err := p.hostMetrics.sampleHostCPU(ctx)
+		core, relative, err := metrics.sampleHostCPU(ctx)
 		if err != nil {
 			return unavailableMetricWithSource(source, err)
 		}
@@ -275,6 +294,22 @@ func (p *taskManagerPlugin) sampleSummaryCPU(ctx context.Context, source string,
 	return cpuMetric(source, core, relative)
 }
 
+func (p *taskManagerPlugin) sampleSummaryMemory() summaryMetric {
+	return sampleSummaryMemory(p.metricsCollector())
+}
+
+func (p *taskManagerPlugin) sampleSummaryDisk(ctx context.Context, path, pathError string) summaryMetric {
+	return sampleSummaryDisk(ctx, p.metricsCollector(), path, pathError)
+}
+
+func (p *taskManagerPlugin) sampleSummaryTemperature() summaryMetric {
+	return sampleSummaryTemperature(p.metricsCollector())
+}
+
+func (p *taskManagerPlugin) sampleSummaryLoad() summaryMetric {
+	return sampleSummaryLoad(p.metricsCollector())
+}
+
 func cpuMetric(source string, core, relative float64) summaryMetric {
 	return summaryMetric{
 		Available:       true,
@@ -284,8 +319,8 @@ func cpuMetric(source string, core, relative float64) summaryMetric {
 	}
 }
 
-func (p *taskManagerPlugin) sampleSummaryMemory() summaryMetric {
-	reading, percent, err := p.hostMetrics.sampleMemory()
+func sampleSummaryMemory(metrics *hostMetricsCollector) summaryMetric {
+	reading, percent, err := metrics.sampleMemory()
 	if err != nil {
 		return unavailableMetric(err)
 	}
@@ -297,13 +332,13 @@ func (p *taskManagerPlugin) sampleSummaryMemory() summaryMetric {
 	}
 }
 
-func (p *taskManagerPlugin) sampleSummaryDisk(ctx context.Context, path, pathError string) summaryMetric {
+func sampleSummaryDisk(ctx context.Context, metrics *hostMetricsCollector, path, pathError string) summaryMetric {
 	metric := summaryMetric{Path: path}
 	if pathError != "" {
 		metric.Error = boundedMetricError(errors.New(pathError))
 		return metric
 	}
-	reading, err := p.hostMetrics.sampleDisk(ctx, path)
+	reading, err := metrics.sampleDisk(ctx, path)
 	if err != nil {
 		metric.Error = boundedMetricError(err)
 		return metric
@@ -324,16 +359,16 @@ func (p *taskManagerPlugin) sampleSummaryDisk(ctx context.Context, path, pathErr
 	return metric
 }
 
-func (p *taskManagerPlugin) sampleSummaryTemperature() summaryMetric {
-	value, err := p.hostMetrics.reader.readTemperature()
+func sampleSummaryTemperature(metrics *hostMetricsCollector) summaryMetric {
+	value, err := metrics.reader.readTemperature()
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 		return unavailableMetric(firstMetricError(err, "CPU temperature is unavailable"))
 	}
 	return summaryMetric{Available: true, Celsius: floatPointer(value)}
 }
 
-func (p *taskManagerPlugin) sampleSummaryLoad() summaryMetric {
-	value, err := p.hostMetrics.reader.readLoad()
+func sampleSummaryLoad(metrics *hostMetricsCollector) summaryMetric {
+	value, err := metrics.reader.readLoad()
 	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
 		return unavailableMetric(firstMetricError(err, "system load is unavailable"))
 	}

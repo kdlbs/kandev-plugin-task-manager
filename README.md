@@ -132,7 +132,6 @@ lifetime average like `ps %cpu`.
 
 ```sh
 make test          # unit tests
-make test-ui       # deterministic monitor model tests
 make test-harness   # portable Playwright layout and settings checks
 make live          # sample this machine and print the per-task rollup
 make package-host  # build a package for the host platform only

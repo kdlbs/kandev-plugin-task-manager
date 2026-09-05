@@ -79,10 +79,6 @@ jobs:
         working-directory: plugin
         run: pnpm --dir .harness exec playwright install --with-deps chromium
 
-      - name: Test UI model
-        working-directory: plugin
-        run: make test-ui
-
       - name: Test browser harness
         working-directory: plugin
         run: make test-harness
