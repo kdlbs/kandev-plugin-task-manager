@@ -1,6 +1,6 @@
 id: "kandev-plugin-task-manager"
 api_version: 1
-version: "0.1.0"
+version: "0.1.1"
 display_name: "Task Manager"
 description: "Per-task CPU and memory for running agents — a hotkey task manager over the real host process tree."
 author: "kandev"
@@ -36,6 +36,6 @@ ui:
   keybindings:
     - id: "open-task-manager"
       # Ctrl+Shift+Esc on Linux/Windows, Cmd+Shift+Esc on macOS.
-      # Remappable in Settings > Keyboard shortcuts.
+      # Remappable in Settings > Plugins > Task Manager.
       default: "mod+shift+escape"
       description: "Open the per-task CPU / memory task manager"
