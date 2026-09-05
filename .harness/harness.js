@@ -109,7 +109,68 @@
     tasks: TASKS,
   };
 
+  const h = window.React.createElement;
+  let translationCatalog = {};
+  const storageListeners = new Set();
+  const saveContributors = new Map();
+  let monitorStorage = null;
+  let monitorStorageUpdatedAt = null;
+
+  function clone(value) {
+    return value === undefined ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function translate(key, options) {
+    let message = translationCatalog.en?.[key] || key;
+    for (const [name, value] of Object.entries(options?.values || {})) {
+      message = message.replaceAll(`{{${name}}}`, String(value));
+    }
+    return message;
+  }
+
+  function plainComponent(tag) {
+    return function Component(props) {
+      const { children, asChild, ...rest } = props || {};
+      return h(tag, rest, children);
+    };
+  }
+
+  function buttonComponent(props) {
+    const { children, variant, size, ...rest } = props || {};
+    return h("button", rest, children);
+  }
+
+  function checkComponent(props) {
+    const { checked, onCheckedChange, children, ...rest } = props || {};
+    return h("input", {
+      ...rest,
+      type: "checkbox",
+      checked: Boolean(checked),
+      onChange: (event) => onCheckedChange?.(event.target.checked),
+    }, children);
+  }
+
+  const UI = {
+    SettingsCard: plainComponent("section"),
+    Card: plainComponent("section"),
+    CardHeader: plainComponent("div"),
+    CardTitle: plainComponent("h2"),
+    CardContent: plainComponent("div"),
+    Button: buttonComponent,
+    Switch: checkComponent,
+    Checkbox: checkComponent,
+    Tooltip: plainComponent("span"),
+    TooltipProvider: plainComponent("span"),
+    TooltipTrigger: plainComponent("span"),
+    TooltipContent: plainComponent("span"),
+  };
+
+  // Each poll swaps the CPU of the top two tasks, which is the churn that
+  // made the real list reshuffle every second. The harness exaggerates it so
+  // an ordering regression is unmissable rather than intermittent.
   let poll = 0;
+  let summaryFetches = 0;
+  let lastSummaryRequest = null;
   function reportForPoll() {
     poll += 1;
     const swing = poll % 2 === 0;
@@ -124,12 +185,15 @@
   }
 
   window.__pollCount = () => poll;
+  window.__summaryFetchCount = () => summaryFetches;
+  window.__lastSummaryRequest = () => clone(lastSummaryRequest);
+  // Lets the ordering test restart the climbing task from idle, so its rank
+  // is measured from a known starting point rather than wherever the earlier
+  // steps happened to leave it.
   window.__resetClimb = () => {
     poll = 0;
   };
 
-  const h = window.React.createElement;
-  const translations = {};
   function HarnessAction({ label, icon, text, tooltip, onClick }) {
     return h(
       "button",
@@ -145,7 +209,59 @@
     jsx: h,
     theme: "dark",
     api: {
-      fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve(reportForPoll()) }),
+      fetch: (path, options = {}) => {
+        if (path === "webhooks/summary") {
+          summaryFetches += 1;
+          let request = {};
+          try {
+            request = JSON.parse(options.body || "{}");
+            lastSummaryRequest = request;
+          } catch (_error) {
+            return Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({ error: "bad request" }) });
+          }
+          const source = request.cpu_source || "tasks";
+          const metrics = {};
+          for (const id of request.metric_ids || []) {
+            if (id === "cpu") {
+              metrics.cpu = {
+                available: true,
+                source,
+                core_percent: source === "host" ? 240 : 42,
+                relative_percent: source === "host" ? 15 : 2.625,
+              };
+            } else if (id === "memory") {
+              metrics.memory = {
+                available: true,
+                used_bytes: 8 * 1024 * 1024 * 1024,
+                total_bytes: 32 * 1024 * 1024 * 1024,
+                percent: 25,
+              };
+            } else if (id === "disk") {
+              metrics.disk = {
+                available: true,
+                path: "/",
+                used_bytes: 82 * 1024 * 1024 * 1024,
+                total_bytes: 100 * 1024 * 1024 * 1024,
+                percent: 82,
+              };
+            } else if (id === "cpu_temperature") {
+              metrics.cpu_temperature = { available: true, celsius: 57.5 };
+            } else if (id === "system_load") {
+              metrics.system_load = { available: true, one_minute: 1.25 };
+            }
+          }
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              sampled_at: new Date().toISOString(),
+              refresh_interval_seconds: 1,
+              cpu_cores: CORES,
+              metrics,
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(reportForPoll()) });
+      },
       baseUrl: "",
     },
     navigate: (href) => console.log("navigate", href),
@@ -154,24 +270,63 @@
       window.__modalTitle = options.title;
       return { close: () => {} };
     },
+    ui: { ...UI, ...(mode === "legacy" ? {} : { Action: HarnessAction }) },
     i18n: {
-      useTranslation() {
-        return {
-          t(key, options = {}) {
-            const message = translations[key] || options.defaultValue || key;
-            return message.replace(/\{\{(\w+)\}\}/g, (_match, name) => options.values?.[name] ?? "");
-          },
-        };
+      locale: "en",
+      t: translate,
+      useTranslation: () => ({ locale: "en", t: translate }),
+    },
+    storage: {
+      get: async () => monitorStorageUpdatedAt
+        ? { value: clone(monitorStorage), updatedAt: monitorStorageUpdatedAt }
+        : null,
+      set: async (_scope, _scopeId, _key, value, options = {}) => {
+        if (options.ifUnmodifiedSince && options.ifUnmodifiedSince !== monitorStorageUpdatedAt) {
+          const error = new Error("storage conflict");
+          error.name = "PluginStorageConflictError";
+          throw error;
+        }
+        monitorStorage = clone(value);
+        monitorStorageUpdatedAt = new Date().toISOString();
+        // The real host suppresses the writer's own subscription echo. The
+        // controller publishes its local save directly; external updates use
+        // __notifyMonitorStorage below.
+        return { value: clone(monitorStorage), updatedAt: monitorStorageUpdatedAt };
+      },
+      subscribe: (_filter, handler) => {
+        storageListeners.add(handler);
+        return () => storageListeners.delete(handler);
       },
     },
-    ui: mode === "legacy" ? {} : { Action: HarnessAction },
+    useSettingsSaveContributor: (contributor) => {
+      saveContributors.set(contributor.id, contributor);
+      window.__settingsContributor = contributor;
+    },
+  };
+
+  window.__setMonitorStorage = (value) => {
+    monitorStorage = clone(value);
+    monitorStorageUpdatedAt = new Date().toISOString();
+  };
+  window.__notifyMonitorStorage = (value) => {
+    monitorStorage = clone(value);
+    monitorStorageUpdatedAt = new Date().toISOString();
+    for (const listener of storageListeners) listener();
+  };
+  window.__saveMonitorSettings = () => {
+    const contributor = window.__settingsContributor;
+    return contributor ? contributor.save(contributor.revision) : Promise.reject(new Error("no settings contributor"));
+  };
+  window.__discardMonitorSettings = () => {
+    const contributor = window.__settingsContributor;
+    return contributor?.discard(contributor.revision);
   };
 
   const slots = {};
   const keys = {};
   const registry = {
     registerTranslations(catalogs) {
-      Object.assign(translations, catalogs.en || {});
+      translationCatalog = catalogs;
     },
     registerComponent(slot, Component) {
       slots[slot] = Component;
@@ -190,6 +345,11 @@
       const presentation = new URLSearchParams(window.location.search).get("presentation") || "desktop";
       window.__createRoot(document.getElementById("chip-slot")).render(
         h(slots["main-top-bar"], { slotProps: { presentation, currentPage: "kanban" } }),
+      );
+    }
+    if (slots["plugin-settings"]) {
+      window.__createRoot(document.getElementById("settings-body")).render(
+        h(slots["plugin-settings"], { pluginId: id, status: "active" }),
       );
     }
     document.getElementById("modal-title").textContent = window.__modalTitle;

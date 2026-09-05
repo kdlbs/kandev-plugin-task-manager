@@ -74,6 +74,10 @@
         display: flex;
         justify-content: flex-end;
       }
+      #settings {
+        max-width: 48rem;
+        margin: 1rem auto 0;
+      }
     </style>
     <!-- Deliberately no stylesheet link: the bundle injects its own, and the
          harness must exercise exactly what ships. -->
@@ -84,6 +88,7 @@
       <h2 id="modal-title"></h2>
       <div id="modal-body"></div>
     </div>
+    <div id="settings"><div id="settings-body"></div></div>
     <script src="./globals.bundle.js"></script>
     <script src="./harness.js"></script>
     <script src="../ui/bundle.js"></script>

@@ -22,6 +22,7 @@ type fakeScanner struct {
 	index     int
 	env       map[int]identity
 	idCalls   map[int]int
+	memCalls  int
 	memBasis  string
 	scanError error
 }
@@ -48,6 +49,7 @@ func (f *fakeScanner) identity(pid int) (string, string, bool) {
 }
 
 func (f *fakeScanner) memoryBytes(_ int, rss uint64) (uint64, string) {
+	f.memCalls++
 	if f.memBasis == basisPSS {
 		return rss / 2, basisPSS
 	}

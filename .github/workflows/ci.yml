@@ -71,3 +71,23 @@ jobs:
       - name: Package current platform
         working-directory: plugin
         run: make package-host
+
+      - name: Install browser harness dependencies
+        working-directory: plugin
+        run: npm ci --prefix .harness
+
+      - name: Install Chromium
+        working-directory: plugin
+        run: cd .harness && npx playwright install --with-deps chromium
+
+      - name: Test UI model
+        working-directory: plugin
+        run: make test-ui
+
+      - name: Test browser harness
+        working-directory: plugin
+        run: make test-harness
+
+      - name: Build package
+        working-directory: plugin
+        run: make package
