@@ -36,6 +36,18 @@ jobs:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          version: "9.15.9"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: plugin/.harness/pnpm-lock.yaml
+
       - name: Check module files are tidy
         working-directory: plugin
         run: |
@@ -58,3 +70,23 @@ jobs:
       - name: Package current platform
         working-directory: plugin
         run: make package-host
+
+      - name: Install browser harness dependencies
+        working-directory: plugin
+        run: pnpm --dir .harness install --frozen-lockfile
+
+      - name: Install Chromium
+        working-directory: plugin
+        run: pnpm --dir .harness exec playwright install --with-deps chromium
+
+      - name: Test UI model
+        working-directory: plugin
+        run: make test-ui
+
+      - name: Test browser harness
+        working-directory: plugin
+        run: make test-harness
+
+      - name: Build package
+        working-directory: plugin
+        run: make package

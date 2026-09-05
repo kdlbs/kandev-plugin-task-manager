@@ -2,7 +2,7 @@ id: "kandev-plugin-task-manager"
 api_version: 1
 version: "0.1.3"
 display_name: "Task Manager"
-description: "Per-task CPU and memory for running agents — a hotkey task manager over the real host process tree."
+description: "Per-task CPU and memory plus an optional ambient host monitor for running agents."
 author: "kandev"
 categories: ["tools"]
 repo_url: "https://github.com/kdlbs/kandev-plugin-task-manager"
@@ -20,12 +20,33 @@ runtime:
 # (/proc on Linux, ps + sysctl on macOS), not from kandev.
 capabilities:
   api_read: ["tasks"]
+  user_state: true
+
+config_schema:
+  type: object
+  properties:
+    refresh_interval_seconds:
+      type: integer
+      title: "Ambient refresh interval"
+      description: "Seconds between Task Manager top-bar updates."
+      enum: [1, 2, 5, 10, 30, 60, 120, 300]
+      default: 5
+    disk_path:
+      type: string
+      title: "Disk path"
+      description: "Filesystem path whose capacity metadata is measured. Files and directories are not scanned."
+      default: "/"
+  required: ["refresh_interval_seconds", "disk_path"]
 
 webhooks:
   - key: "usage"
     description: "Per-task CPU/memory rollup of the local agent process trees (UI request relay, not an external webhook)"
     # POST because kandev demands an Origin header on session-authenticated
     # webhooks, and browsers omit Origin on same-origin GETs.
+    method: "POST"
+    access: "authenticated"
+  - key: "summary"
+    description: "Lightweight ambient host and task resource summary for the top bar"
     method: "POST"
     access: "authenticated"
 

@@ -1,4 +1,4 @@
-.PHONY: build test live fmt vet package package-host clean
+.PHONY: build test test-ui test-harness live fmt vet package package-host clean
 
 BIN := bin/kandev-plugin-task-manager
 VERSION := 0.1.3
@@ -11,6 +11,14 @@ build:
 
 test:
 	go test ./server/...
+
+test-ui:
+	node --test ui/*.test.mjs
+
+test-harness:
+	pnpm --dir .harness install --frozen-lockfile
+	node .harness/build-globals.mjs
+	server=$$(python3 -m http.server 8977 --directory . >/tmp/kandev-task-manager-harness.log 2>&1 & echo $$!); trap 'kill $$server 2>/dev/null || true' EXIT; node .harness/shoot.mjs
 
 ## Sample the machine this runs on and print the per-task rollup. A
 ## diagnostic for verifying attribution end to end, not part of `test`.

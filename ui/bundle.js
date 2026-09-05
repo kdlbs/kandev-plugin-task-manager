@@ -8,12 +8,12 @@
 // one that is actually working.
 //
 //   • global hotkey (Ctrl/Cmd + Shift + Esc) opens the modal,
-//   • a top-bar chip shows live total CPU and opens the same modal.
+//   • an ambient top-bar monitor shows selected host readings and opens the
+//     same modal.
 //
-// Data flow: panel -> host.api.fetch("webhooks/usage")
-//   (= GET /api/plugins/kandev-plugin-task-manager/webhooks/usage)
-//   -> kandev relays over gRPC HandleWebhook -> plugin backend samples the
-//   host process table -> JSON rollup back.
+// Data flow: the panel calls webhooks/usage for detailed process data, while
+// the ambient top bar calls webhooks/summary with only the enabled families.
+// Kandev relays both authenticated requests over gRPC HandleWebhook.
 //
 // Nothing here may touch React at module scope: the bundle is evaluated
 // before initialize() hands it the host, so every component is built inside a
@@ -23,12 +23,24 @@
   const PLUGIN_ID = "kandev-plugin-task-manager";
   const STYLE_ELEMENT_ID = "ktm-styles";
 
-  // The modal polls fast because CPU is the point; the chip is ambient, so it
-  // settles for a slower cadence. Both are above the backend's own sampling
+  // The modal polls fast because CPU is the point; the ambient monitor uses
+  // the operator's slower cadence. Both are above the backend's own sampling
   // window (700ms) and below the age at which it discards its baseline (5s),
-  // which is what keeps every poll a cheap warm one.
+  // which is what keeps each active poll a cheap warm one.
   const PANEL_POLL_MS = 1200;
-  const CHIP_POLL_MS = 4000;
+  const DEFAULT_MONITOR_INTERVAL_MS = 5000;
+  const MONITOR_SETTINGS_VERSION = 1;
+  const MONITOR_STORAGE_SCOPE = "instance";
+  const MONITOR_STORAGE_SCOPE_ID = "profile";
+  const MONITOR_STORAGE_KEY = "topbar-settings-v1";
+  const MONITOR_METRIC_IDS = [
+    "cpu",
+    "memory",
+    "disk",
+    "cpu_temperature",
+    "system_load",
+  ];
+  const DEFAULT_DISK_THRESHOLD = 80;
 
   // How long the row order is held steady before it may be re-ranked. CPU
   // moves every poll, so ranking strictly by the latest reading makes the list
@@ -59,6 +71,245 @@
 
   const TITLE = "Task Manager";
   const HOTKEY_HINT = "⌘/Ctrl + Shift + Esc";
+
+  const TRANSLATIONS = {
+    en: {
+      monitorTitle: "Host monitor",
+      monitorOpen: "Open Task Manager host monitor",
+      monitorHotkeyHint: "Open Task Manager with {{hotkey}}",
+      monitorLoading: "Loading monitor settings…",
+      monitorSettingsTitle: "Host monitor display",
+      monitorSettingsDescription:
+        "Choose the host readings shown in the top bar. The detailed Task Manager dialog keeps its own view.",
+      monitorSettingsLoadError: "Monitor settings could not be loaded.",
+      monitorSettingsSaveError: "Monitor settings could not be saved.",
+      monitorSettingsConflict:
+        "These settings changed in another Kandev client. Review the refreshed values before saving again.",
+      monitorSettingsRetry: "Retry",
+      monitorSettingsEnabled: "Show",
+      monitorSettingsBar: "Bar",
+      monitorMetricCpu: "CPU",
+      monitorMetricMemory: "Memory",
+      monitorMetricDisk: "Disk",
+      monitorMetricTemperature: "CPU temperature",
+      monitorMetricLoad: "System load",
+      monitorCpuMode: "CPU reading",
+      monitorCpuModeHost: "Host relative",
+      monitorCpuModeTasks: "Tasks relative",
+      monitorCpuModePerCore: "Tasks per core",
+      monitorMemoryUnit: "Memory value",
+      monitorMemoryUnitPercent: "Used percent",
+      monitorMemoryUnitGB: "Used GB",
+      monitorDiskVisibility: "Disk visibility",
+      monitorDiskVisibilityAlways: "Always show",
+      monitorDiskVisibilityThreshold: "Show at threshold",
+      monitorDiskThreshold: "Threshold %",
+      monitorMoveUp: "Move metric up",
+      monitorMoveDown: "Move metric down",
+      monitorDragMetric: "Drag to reorder metric",
+      monitorDiskHelpLabel: "About disk monitoring cost and path",
+      monitorDiskHelp:
+        "Reports capacity for the filesystem containing the configured path. It reads filesystem metadata; it does not scan files or directories. The visibility threshold hides this reading from the top bar but does not stop sampling.",
+      monitorUnavailable: "Unavailable",
+      monitorStale: "stale",
+      monitorSampledAt: "Sampled {{time}}",
+      monitorHostSource: "host",
+      monitorTasksSource: "tasks",
+      monitorUsedOf: "{{used}} of {{total}}",
+      monitorBytesDetail: "{{used}} / {{total}} bytes",
+      monitorPath: "Path {{path}}",
+      monitorNoEnabledMetrics: "Enable a reading to show the host monitor in the top bar.",
+      monitorNoSnapshot: "Waiting for the first host reading…",
+      monitorUnknownError: "Unknown monitor error",
+    },
+    "pt-pt": {
+      monitorTitle: "Monitor do sistema",
+      monitorOpen: "Abrir o monitor do sistema do Gestor de tarefas",
+      monitorHotkeyHint: "Abrir o Gestor de tarefas com {{hotkey}}",
+      monitorLoading: "A carregar as definições do monitor…",
+      monitorSettingsTitle: "Apresentação do monitor do sistema",
+      monitorSettingsDescription:
+        "Escolha as leituras do sistema apresentadas na barra superior. A janela detalhada mantém a sua própria vista.",
+      monitorSettingsLoadError: "Não foi possível carregar as definições do monitor.",
+      monitorSettingsSaveError: "Não foi possível guardar as definições do monitor.",
+      monitorSettingsConflict:
+        "Estas definições mudaram noutro cliente Kandev. Reveja os valores atualizados antes de guardar novamente.",
+      monitorSettingsRetry: "Tentar novamente",
+      monitorSettingsEnabled: "Mostrar",
+      monitorSettingsBar: "Barra",
+      monitorMetricCpu: "CPU",
+      monitorMetricMemory: "Memória",
+      monitorMetricDisk: "Disco",
+      monitorMetricTemperature: "Temperatura da CPU",
+      monitorMetricLoad: "Carga do sistema",
+      monitorCpuMode: "Leitura da CPU",
+      monitorCpuModeHost: "Relativa ao sistema",
+      monitorCpuModeTasks: "Relativa às tarefas",
+      monitorCpuModePerCore: "Tarefas por núcleo",
+      monitorMemoryUnit: "Valor da memória",
+      monitorMemoryUnitPercent: "Percentagem usada",
+      monitorMemoryUnitGB: "GB usados",
+      monitorDiskVisibility: "Visibilidade do disco",
+      monitorDiskVisibilityAlways: "Mostrar sempre",
+      monitorDiskVisibilityThreshold: "Mostrar no limite",
+      monitorDiskThreshold: "Limite %",
+      monitorMoveUp: "Mover métrica para cima",
+      monitorMoveDown: "Mover métrica para baixo",
+      monitorDragMetric: "Arrastar para reordenar métrica",
+      monitorDiskHelpLabel: "Sobre o custo e o caminho do monitor do disco",
+      monitorDiskHelp:
+        "Mostra a capacidade do sistema de ficheiros que contém o caminho configurado. Lê metadados do sistema de ficheiros; não analisa ficheiros nem diretórios. O limite de visibilidade oculta esta leitura da barra superior, mas não interrompe a amostragem.",
+      monitorUnavailable: "Indisponível",
+      monitorStale: "desatualizado",
+      monitorSampledAt: "Amostrado {{time}}",
+      monitorHostSource: "sistema",
+      monitorTasksSource: "tarefas",
+      monitorUsedOf: "{{used}} de {{total}}",
+      monitorBytesDetail: "{{used}} / {{total}} bytes",
+      monitorPath: "Caminho {{path}}",
+      monitorNoEnabledMetrics: "Ative uma leitura para mostrar o monitor na barra superior.",
+      monitorNoSnapshot: "À espera da primeira leitura do sistema…",
+      monitorUnknownError: "Erro desconhecido do monitor",
+    },
+    "zh-cn": {
+      monitorTitle: "主机监视器",
+      monitorOpen: "打开任务管理器主机监视器",
+      monitorHotkeyHint: "使用 {{hotkey}} 打开任务管理器",
+      monitorLoading: "正在加载监视器设置…",
+      monitorSettingsTitle: "主机监视器显示",
+      monitorSettingsDescription: "选择显示在顶部栏中的主机读数。详细任务管理器对话框保持独立视图。",
+      monitorSettingsLoadError: "无法加载监视器设置。",
+      monitorSettingsSaveError: "无法保存监视器设置。",
+      monitorSettingsConflict: "这些设置已在另一个 Kandev 客户端中更改。请检查刷新后的值再保存。",
+      monitorSettingsRetry: "重试",
+      monitorSettingsEnabled: "显示",
+      monitorSettingsBar: "条形图",
+      monitorMetricCpu: "CPU",
+      monitorMetricMemory: "内存",
+      monitorMetricDisk: "磁盘",
+      monitorMetricTemperature: "CPU 温度",
+      monitorMetricLoad: "系统负载",
+      monitorCpuMode: "CPU 读数",
+      monitorCpuModeHost: "相对主机",
+      monitorCpuModeTasks: "相对任务",
+      monitorCpuModePerCore: "每核心任务",
+      monitorMemoryUnit: "内存数值",
+      monitorMemoryUnitPercent: "使用百分比",
+      monitorMemoryUnitGB: "使用 GB",
+      monitorDiskVisibility: "磁盘可见性",
+      monitorDiskVisibilityAlways: "始终显示",
+      monitorDiskVisibilityThreshold: "达到阈值后显示",
+      monitorDiskThreshold: "阈值 %",
+      monitorMoveUp: "向上移动指标",
+      monitorMoveDown: "向下移动指标",
+      monitorDragMetric: "拖动以重新排列指标",
+      monitorDiskHelpLabel: "关于磁盘监视成本和路径",
+      monitorDiskHelp: "报告包含配置路径的文件系统容量。它读取文件系统元数据，不会扫描文件或目录。可见性阈值只会隐藏顶部栏读数，不会停止采样。",
+      monitorUnavailable: "不可用",
+      monitorStale: "过期",
+      monitorSampledAt: "采样于 {{time}}",
+      monitorHostSource: "主机",
+      monitorTasksSource: "任务",
+      monitorUsedOf: "{{used}} / {{total}}",
+      monitorBytesDetail: "{{used}} / {{total}} 字节",
+      monitorPath: "路径 {{path}}",
+      monitorNoEnabledMetrics: "启用一项读数后，主机监视器会显示在顶部栏。",
+      monitorNoSnapshot: "正在等待第一条主机读数…",
+      monitorUnknownError: "未知监视器错误",
+    },
+    "zh-hk": {
+      monitorTitle: "主機監察器",
+      monitorOpen: "開啟工作管理員主機監察器",
+      monitorHotkeyHint: "使用 {{hotkey}} 開啟工作管理員",
+      monitorLoading: "正在載入監察器設定…",
+      monitorSettingsTitle: "主機監察器顯示",
+      monitorSettingsDescription: "選擇顯示在頂部列的主機讀數。詳細工作管理員對話方塊保持獨立檢視。",
+      monitorSettingsLoadError: "無法載入監察器設定。",
+      monitorSettingsSaveError: "無法儲存監察器設定。",
+      monitorSettingsConflict: "這些設定已在另一個 Kandev 用戶端中更改。請檢查重新整理後的值再儲存。",
+      monitorSettingsRetry: "重試",
+      monitorSettingsEnabled: "顯示",
+      monitorSettingsBar: "條形圖",
+      monitorMetricCpu: "CPU",
+      monitorMetricMemory: "記憶體",
+      monitorMetricDisk: "磁碟",
+      monitorMetricTemperature: "CPU 溫度",
+      monitorMetricLoad: "系統負載",
+      monitorCpuMode: "CPU 讀數",
+      monitorCpuModeHost: "相對主機",
+      monitorCpuModeTasks: "相對工作",
+      monitorCpuModePerCore: "每核心工作",
+      monitorMemoryUnit: "記憶體數值",
+      monitorMemoryUnitPercent: "使用百分比",
+      monitorMemoryUnitGB: "使用 GB",
+      monitorDiskVisibility: "磁碟可見性",
+      monitorDiskVisibilityAlways: "一律顯示",
+      monitorDiskVisibilityThreshold: "達到閾值後顯示",
+      monitorDiskThreshold: "閾值 %",
+      monitorMoveUp: "向上移動指標",
+      monitorMoveDown: "向下移動指標",
+      monitorDragMetric: "拖曳以重新排列指標",
+      monitorDiskHelpLabel: "關於磁碟監察成本及路徑",
+      monitorDiskHelp: "報告包含設定路徑的檔案系統容量。它讀取檔案系統中繼資料，不會掃描檔案或目錄。可見性閾值只會隱藏頂部列讀數，不會停止取樣。",
+      monitorUnavailable: "無法使用",
+      monitorStale: "過時",
+      monitorSampledAt: "取樣於 {{time}}",
+      monitorHostSource: "主機",
+      monitorTasksSource: "工作",
+      monitorUsedOf: "{{used}} / {{total}}",
+      monitorBytesDetail: "{{used}} / {{total}} 字節",
+      monitorPath: "路徑 {{path}}",
+      monitorNoEnabledMetrics: "啟用一項讀數後，主機監察器會顯示在頂部列。",
+      monitorNoSnapshot: "正在等待第一條主機讀數…",
+      monitorUnknownError: "未知監察器錯誤",
+    },
+    "zh-tw": {
+      monitorTitle: "主機監視器",
+      monitorOpen: "開啟工作管理員主機監視器",
+      monitorHotkeyHint: "使用 {{hotkey}} 開啟工作管理員",
+      monitorLoading: "正在載入監視器設定…",
+      monitorSettingsTitle: "主機監視器顯示",
+      monitorSettingsDescription: "選擇顯示在頂部列中的主機讀數。詳細工作管理員對話方塊保持獨立檢視。",
+      monitorSettingsLoadError: "無法載入監視器設定。",
+      monitorSettingsSaveError: "無法儲存監視器設定。",
+      monitorSettingsConflict: "這些設定已在另一個 Kandev 用戶端中變更。請檢查重新整理後的值再儲存。",
+      monitorSettingsRetry: "重試",
+      monitorSettingsEnabled: "顯示",
+      monitorSettingsBar: "長條圖",
+      monitorMetricCpu: "CPU",
+      monitorMetricMemory: "記憶體",
+      monitorMetricDisk: "磁碟",
+      monitorMetricTemperature: "CPU 溫度",
+      monitorMetricLoad: "系統負載",
+      monitorCpuMode: "CPU 讀數",
+      monitorCpuModeHost: "相對主機",
+      monitorCpuModeTasks: "相對工作",
+      monitorCpuModePerCore: "每核心工作",
+      monitorMemoryUnit: "記憶體數值",
+      monitorMemoryUnitPercent: "使用百分比",
+      monitorMemoryUnitGB: "使用 GB",
+      monitorDiskVisibility: "磁碟可見性",
+      monitorDiskVisibilityAlways: "一律顯示",
+      monitorDiskVisibilityThreshold: "達到閾值後顯示",
+      monitorDiskThreshold: "閾值 %",
+      monitorMoveUp: "向上移動指標",
+      monitorMoveDown: "向下移動指標",
+      monitorDragMetric: "拖曳以重新排列指標",
+      monitorDiskHelpLabel: "關於磁碟監視成本與路徑",
+      monitorDiskHelp: "報告包含設定路徑的檔案系統容量。它讀取檔案系統中繼資料，不會掃描檔案或目錄。可見性閾值只會隱藏頂部列讀數，不會停止取樣。",
+      monitorUnavailable: "無法使用",
+      monitorStale: "過時",
+      monitorSampledAt: "取樣於 {{time}}",
+      monitorHostSource: "主機",
+      monitorTasksSource: "工作",
+      monitorUsedOf: "{{used}} / {{total}}",
+      monitorBytesDetail: "{{used}} / {{total}} 位元組",
+      monitorPath: "路徑 {{path}}",
+      monitorNoEnabledMetrics: "啟用一項讀數後，主機監視器會顯示在頂部列。",
+      monitorNoSnapshot: "正在等待第一條主機讀數…",
+      monitorUnknownError: "未知監視器錯誤",
+    },
+  };
 
   // The stylesheet ships inside the bundle and is injected on initialize,
   // rather than being declared as `ui.styles` for kandev to fetch as a
@@ -457,45 +708,260 @@
   color: var(--muted-foreground);
 }
 
-/* ---- top-bar chip ---- */
+.ktm-fill {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 160ms ease;
+}
 
-.ktm-chip {
+.ktm-fill-hot {
+  background: var(--destructive);
+}
+
+/* ---- ambient monitor ---- */
+
+.ktm-monitor {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.125rem;
+  min-width: 0;
+  max-width: 100%;
   height: 1.5rem;
-  padding: 0 0.5rem;
-  border-radius: 0.3125rem;
+  padding: 0 0.25rem;
+  overflow: hidden;
   border: 1px solid var(--border);
+  border-radius: 0.3125rem;
   background: var(--background);
-  /* A <button> does not inherit colour: without this it falls back to the
-   * UA's dark grey buttontext, which is invisible on a dark background. */
   color: var(--foreground);
   font-size: 0.6875rem;
   cursor: pointer;
-  white-space: nowrap;
 }
 
-.ktm-chip:hover {
+.ktm-monitor:hover {
   background: var(--muted);
 }
 
-.ktm-chip-label {
-  color: var(--muted-foreground);
-  opacity: 0.8;
+.ktm-monitor-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0 0.25rem;
+  white-space: nowrap;
 }
 
-.ktm-chip-value {
+.ktm-monitor-segment + .ktm-monitor-segment {
+  border-left: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+
+.ktm-monitor-label {
+  color: var(--muted-foreground);
+  opacity: 0.85;
+}
+
+.ktm-monitor-value {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
 
-.ktm-chip-track {
-  width: 2.5rem;
+.ktm-monitor-unavailable {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.ktm-monitor-stale .ktm-monitor-value {
+  opacity: 0.72;
+}
+
+.ktm-monitor-track {
+  width: 2.25rem;
   height: 0.25rem;
+  overflow: hidden;
   border-radius: 0.125rem;
   background: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+/* ---- settings ---- */
+
+.ktm-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ktm-settings-description,
+.ktm-settings-status {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.ktm-settings-status-error {
+  color: var(--destructive);
+}
+
+.ktm-settings-status-conflict {
+  padding: 0.5rem 0.625rem;
+  border: 1px solid color-mix(in oklab, var(--destructive) 45%, var(--border));
+  border-radius: 0.375rem;
+  color: var(--destructive);
+}
+
+.ktm-setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: color-mix(in oklab, var(--muted) 35%, transparent);
+}
+
+.ktm-setting-row-dragover {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.ktm-setting-heading,
+.ktm-setting-controls,
+.ktm-setting-actions,
+.ktm-setting-label {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.ktm-setting-heading {
+  gap: 0.5rem;
+}
+
+.ktm-setting-label {
+  flex: 1;
+  gap: 0.375rem;
+  font-weight: 600;
+}
+
+.ktm-setting-controls {
+  flex-wrap: wrap;
+  gap: 0.625rem 1rem;
+  padding-left: 1.75rem;
+}
+
+.ktm-setting-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.ktm-setting-control select,
+.ktm-setting-control input[type="number"] {
+  min-height: 1.75rem;
+  max-width: 11rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+}
+
+.ktm-setting-control input[type="number"] {
+  width: 4.5rem;
+}
+
+.ktm-drag-handle,
+.ktm-help-button,
+.ktm-move-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.ktm-drag-handle {
+  width: 1.25rem;
+  height: 1.5rem;
+  cursor: grab;
+  font-size: 0.875rem;
+}
+
+.ktm-drag-handle:active {
+  cursor: grabbing;
+}
+
+.ktm-help-button {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.ktm-drag-handle:hover,
+.ktm-help-button:hover,
+.ktm-move-button:hover,
+.ktm-drag-handle:focus-visible,
+.ktm-help-button:focus-visible,
+.ktm-move-button:focus-visible {
+  border-color: var(--ring);
+  color: var(--foreground);
+  outline: none;
+}
+
+.ktm-setting-actions {
+  gap: 0.375rem;
+  margin-left: auto;
+}
+
+.ktm-move-button {
+  min-height: 1.625rem;
+  padding: 0 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.6875rem;
+}
+
+.ktm-move-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.ktm-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 640px) {
+  .ktm-monitor {
+    height: 2.75rem;
+    padding: 0 0.5rem;
+  }
+
+  .ktm-monitor-segment {
+    padding: 0 0.375rem;
+  }
+
+  .ktm-monitor-track {
+    width: 1.75rem;
+  }
 }
 `;
 
@@ -522,6 +988,970 @@
     const mb = bytes / 1024 / 1024;
     if (mb < 1024) return `${Math.round(mb)} MB`;
     return `${(mb / 1024).toFixed(1)} GB`;
+  }
+
+  function formatGB(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 GB";
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+
+  const DEFAULT_MONITOR_METRICS = [
+    { id: "cpu", enabled: true, mode: "tasks_per_core", show_bar: true },
+    { id: "memory", enabled: false, unit: "percent", show_bar: true },
+    {
+      id: "disk",
+      enabled: false,
+      show_bar: true,
+      visibility: "always",
+      threshold_percent: DEFAULT_DISK_THRESHOLD,
+    },
+    { id: "cpu_temperature", enabled: false },
+    { id: "system_load", enabled: false },
+  ];
+
+  const CPU_MODES = new Set(["host_relative", "tasks_relative", "tasks_per_core"]);
+  const MEMORY_UNITS = new Set(["percent", "gb"]);
+  const DISK_VISIBILITY = new Set(["always", "threshold"]);
+
+  function isRecord(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function cloneMonitorMetric(metric) {
+    return { ...metric };
+  }
+
+  function defaultMonitorSettings() {
+    return {
+      version: MONITOR_SETTINGS_VERSION,
+      metrics: DEFAULT_MONITOR_METRICS.map(cloneMonitorMetric),
+    };
+  }
+
+  function normalizeMonitorSettings(value) {
+    if (!isRecord(value) || value.version !== MONITOR_SETTINGS_VERSION || !Array.isArray(value.metrics)) {
+      return defaultMonitorSettings();
+    }
+    const defaults = new Map(DEFAULT_MONITOR_METRICS.map((metric) => [metric.id, metric]));
+    const seen = new Set();
+    const metrics = [];
+    for (const candidate of value.metrics) {
+      if (!isRecord(candidate) || typeof candidate.id !== "string" || !defaults.has(candidate.id)) continue;
+      if (seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      metrics.push(normalizeMonitorMetric(candidate, defaults.get(candidate.id)));
+    }
+    for (const metric of DEFAULT_MONITOR_METRICS) {
+      if (!seen.has(metric.id)) metrics.push(cloneMonitorMetric(metric));
+    }
+    return { version: MONITOR_SETTINGS_VERSION, metrics };
+  }
+
+  function normalizeMonitorMetric(candidate, fallback) {
+    const metric = { ...fallback };
+    if (typeof candidate.enabled === "boolean") metric.enabled = candidate.enabled;
+    if (candidate.id === "cpu") {
+      if (CPU_MODES.has(candidate.mode)) metric.mode = candidate.mode;
+      if (typeof candidate.show_bar === "boolean") metric.show_bar = candidate.show_bar;
+    } else if (candidate.id === "memory") {
+      if (MEMORY_UNITS.has(candidate.unit)) metric.unit = candidate.unit;
+      if (typeof candidate.show_bar === "boolean") metric.show_bar = candidate.show_bar;
+    } else if (candidate.id === "disk") {
+      if (typeof candidate.show_bar === "boolean") metric.show_bar = candidate.show_bar;
+      if (DISK_VISIBILITY.has(candidate.visibility)) metric.visibility = candidate.visibility;
+      if (Number.isInteger(candidate.threshold_percent) && candidate.threshold_percent >= 1 && candidate.threshold_percent <= 100) {
+        metric.threshold_percent = candidate.threshold_percent;
+      }
+    }
+    return metric;
+  }
+
+  function settingsRevision(settings) {
+    return JSON.stringify(normalizeMonitorSettings(settings));
+  }
+
+  function settingsEqual(left, right) {
+    return settingsRevision(left) === settingsRevision(right);
+  }
+
+  function enabledMonitorMetrics(settings) {
+    return normalizeMonitorSettings(settings).metrics.filter((metric) => metric.enabled);
+  }
+
+  function cpuSourceForMode(mode) {
+    return mode === "host_relative" ? "host" : "tasks";
+  }
+
+  function summaryRequestForSettings(settings) {
+    const normalized = normalizeMonitorSettings(settings);
+    const metrics = enabledMonitorMetrics(normalized);
+    const cpu = metrics.find((metric) => metric.id === "cpu");
+    const request = { metric_ids: metrics.map((metric) => metric.id) };
+    if (cpu) request.cpu_source = cpuSourceForMode(cpu.mode);
+    return request;
+  }
+
+  function moveMonitorMetric(metrics, id, direction) {
+    const next = (metrics || []).map(cloneMonitorMetric);
+    const index = next.findIndex((metric) => metric.id === id);
+    const target = direction === "up" ? index - 1 : index + 1;
+    if (index < 0 || target < 0 || target >= next.length) return next;
+    [next[index], next[target]] = [next[target], next[index]];
+    return next;
+  }
+
+  function reorderMonitorMetrics(metrics, fromId, toId) {
+    const next = (metrics || []).map(cloneMonitorMetric);
+    const from = next.findIndex((metric) => metric.id === fromId);
+    const to = next.findIndex((metric) => metric.id === toId);
+    if (from < 0 || to < 0 || from === to) return next;
+    const [moved] = next.splice(from, 1);
+    next.splice(next.findIndex((metric) => metric.id === toId), 0, moved);
+    return next;
+  }
+
+  function diskMonitorVisible(metric, sample) {
+    if (!metric || !metric.enabled || !sample) return false;
+    if (!sample.available || metric.visibility === "always") return true;
+    return sample.percent >= metric.threshold_percent;
+  }
+
+  function monitorProgressPercent(id, sample) {
+    if (!sample || !sample.available) return null;
+    if (id === "cpu") return sample.relative_percent;
+    if (id === "memory" || id === "disk") return sample.percent;
+    return null;
+  }
+
+  function monitorProgressWidth(value) {
+    if (!Number.isFinite(value) || value <= 0) return "0%";
+    const percent = Math.min(100, value);
+    return `${Math.max(1.5, percent)}%`;
+  }
+
+  function createMonitorController(host) {
+    let state = {
+      phase: "loading",
+      confirmed: null,
+      draft: null,
+      updatedAt: null,
+      error: null,
+      conflict: false,
+    };
+    let destroyed = false;
+    let requestToken = 0;
+    let saveToken = 0;
+    let unsubscribe = null;
+    const listeners = new Set();
+    const aborter = new AbortController();
+
+    function notify() {
+      for (const listener of listeners) listener();
+    }
+
+    function update(next) {
+      if (destroyed) return;
+      state = next;
+      notify();
+    }
+
+    function isDirty() {
+      return Boolean(state.confirmed && state.draft && !settingsEqual(state.confirmed, state.draft));
+    }
+
+    function getState() {
+      return {
+        ...state,
+        dirty: isDirty(),
+        revision: state.draft ? settingsRevision(state.draft) : "",
+        confirmedRevision: state.confirmed ? settingsRevision(state.confirmed) : "",
+      };
+    }
+
+    async function refresh(keepDraft) {
+      const token = ++requestToken;
+      update({ ...state, phase: "loading", error: keepDraft ? state.error : null });
+      try {
+        const entry = await host.storage.get(
+          MONITOR_STORAGE_SCOPE,
+          MONITOR_STORAGE_SCOPE_ID,
+          MONITOR_STORAGE_KEY,
+          { signal: aborter.signal },
+        );
+        if (destroyed || token !== requestToken) return;
+        const confirmed = normalizeMonitorSettings(entry && entry.value);
+        const draft = keepDraft && isDirty() ? state.draft : confirmed;
+        update({
+          phase: "ready",
+          confirmed,
+          draft,
+          updatedAt: (entry && entry.updatedAt) || null,
+          error: null,
+          conflict: Boolean(keepDraft && isDirty()),
+        });
+      } catch (error) {
+        if (destroyed || token !== requestToken || error?.name === "AbortError") return;
+        update({ ...state, phase: "error", error: String(error?.message || error), conflict: false });
+      }
+    }
+
+    function setDraft(next) {
+      if (state.phase !== "ready") return;
+      update({ ...state, draft: normalizeMonitorSettings(next), error: null, conflict: false });
+    }
+
+    async function save(revision) {
+      if (state.phase !== "ready" || !state.draft || !state.confirmed || revision !== settingsRevision(state.draft)) {
+        throw new Error("settings changed before save completed");
+      }
+      const token = ++saveToken;
+      const draft = normalizeMonitorSettings(state.draft);
+      try {
+        const result = await host.storage.set(
+          MONITOR_STORAGE_SCOPE,
+          MONITOR_STORAGE_SCOPE_ID,
+          MONITOR_STORAGE_KEY,
+          draft,
+          {
+            signal: aborter.signal,
+            ifUnmodifiedSince: state.updatedAt || undefined,
+          },
+        );
+        if (destroyed || token !== saveToken) return;
+        if (settingsRevision(state.draft) !== revision) {
+          // The write may have completed after the user made another edit.
+          // Refresh the confirmed value and keep that newer draft instead of
+          // silently replacing it with the older submitted object.
+          await refresh(true);
+          return;
+        }
+        update({
+          phase: "ready",
+          confirmed: draft,
+          draft,
+          updatedAt: result.updatedAt,
+          error: null,
+          conflict: false,
+        });
+      } catch (error) {
+        if (destroyed || error?.name === "AbortError") return;
+        if (error?.name === "PluginStorageConflictError") {
+          await refresh(true);
+          throw error;
+        }
+        update({ ...state, phase: "ready", error: String(error?.message || error), conflict: false });
+        throw error;
+      }
+    }
+
+    function discard(revision) {
+      if (state.phase !== "ready" || !state.confirmed || (revision && revision !== settingsRevision(state.draft))) return;
+      update({ ...state, draft: state.confirmed, error: null, conflict: false });
+    }
+
+    function retry() {
+      return refresh(false);
+    }
+
+    function start() {
+      if (
+        !host.storage ||
+        typeof host.storage.get !== "function" ||
+        typeof host.storage.set !== "function"
+      ) {
+        update({ ...state, phase: "error", error: "Plugin storage is unavailable", conflict: false });
+        return Promise.resolve();
+      }
+      if (typeof host.storage.subscribe === "function") {
+        unsubscribe = host.storage.subscribe(
+          { scope: MONITOR_STORAGE_SCOPE, scopeId: MONITOR_STORAGE_SCOPE_ID, key: MONITOR_STORAGE_KEY },
+          () => refresh(true),
+        );
+      }
+      return refresh(false);
+    }
+
+    function destroy() {
+      destroyed = true;
+      requestToken += 1;
+      saveToken += 1;
+      aborter.abort();
+      if (unsubscribe) unsubscribe();
+      unsubscribe = null;
+      listeners.clear();
+    }
+
+    return {
+      start,
+      destroy,
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      getState,
+      setDraft,
+      save,
+      discard,
+      retry,
+      isDirty,
+    };
+  }
+
+  function makeUseMonitorState(host, controller) {
+    const { React } = host;
+    return function useMonitorState() {
+      const [, setVersion] = React.useState(0);
+      React.useEffect(() => controller.subscribe(() => setVersion((version) => version + 1)), [controller]);
+      return controller.getState();
+    };
+  }
+
+  function makeUseSummary(host) {
+    const { React } = host;
+    return function useSummary(settingsState) {
+      const [state, setState] = React.useState({
+        loading: false,
+        error: null,
+        report: null,
+        stale: false,
+      });
+      const timer = React.useRef(null);
+
+      React.useEffect(() => {
+        let alive = true;
+        const requestController = new AbortController();
+        const confirmed = settingsState.confirmed;
+        const enabled = confirmed ? enabledMonitorMetrics(confirmed) : [];
+
+        if (settingsState.phase !== "ready" || !confirmed || enabled.length === 0) {
+          setState({ loading: false, error: null, report: null, stale: false });
+          return () => requestController.abort();
+        }
+
+        const schedule = (milliseconds) => {
+          if (!alive) return;
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = setTimeout(load, Math.max(1000, milliseconds));
+        };
+        const load = async () => {
+          if (!alive) return;
+          setState((previous) => ({
+            loading: !previous.report,
+            error: null,
+            report: previous.report,
+            stale: Boolean(previous.report),
+          }));
+          try {
+            const response = await host.api.fetch("webhooks/summary", {
+              method: "POST",
+              signal: requestController.signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(summaryRequestForSettings(confirmed)),
+            });
+            const body = await response.json();
+            if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+            if (!alive) return;
+            setState({ loading: false, error: null, report: body, stale: false });
+            const seconds = Number(body.refresh_interval_seconds);
+            schedule(Number.isFinite(seconds) ? seconds * 1000 : DEFAULT_MONITOR_INTERVAL_MS);
+          } catch (error) {
+            if (!alive || error?.name === "AbortError") return;
+            setState((previous) => ({
+              loading: false,
+              error: String(error?.message || error),
+              report: previous.report,
+              stale: Boolean(previous.report),
+            }));
+            schedule(DEFAULT_MONITOR_INTERVAL_MS);
+          }
+        };
+
+        setState({ loading: true, error: null, report: null, stale: false });
+        load();
+        return () => {
+          alive = false;
+          requestController.abort();
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = null;
+        };
+      }, [host, settingsState.phase, settingsState.confirmedRevision]);
+
+      return { ...state, reload: () => undefined };
+    };
+  }
+
+  function usePluginTranslation(host) {
+    if (host.i18n && typeof host.i18n.useTranslation === "function") {
+      return host.i18n.useTranslation();
+    }
+    return {
+      locale: "en",
+      t: (key) => TRANSLATIONS.en[key] || key,
+    };
+  }
+
+  function interpolateMessage(message, values) {
+    return Object.entries(values || {}).reduce(
+      (result, [key, value]) => result.replaceAll(`{{${key}}}`, String(value)),
+      message,
+    );
+  }
+
+  function monitorMetricLabel(t, id) {
+    const labels = {
+      cpu: "monitorMetricCpu",
+      memory: "monitorMetricMemory",
+      disk: "monitorMetricDisk",
+      cpu_temperature: "monitorMetricTemperature",
+      system_load: "monitorMetricLoad",
+    };
+    return t(labels[id] || id);
+  }
+
+  function monitorTime(locale, timestamp) {
+    if (!timestamp) return "—";
+    try {
+      return new Date(timestamp).toLocaleTimeString(locale || undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    } catch (_error) {
+      return "—";
+    }
+  }
+
+  function monitorValue(metric, sample) {
+    if (!sample || !sample.available) return null;
+    if (metric.id === "cpu") {
+      const value = metric.mode === "tasks_per_core" ? sample.core_percent : sample.relative_percent;
+      return formatCPU(value);
+    }
+    if (metric.id === "memory") {
+      return metric.unit === "gb" ? formatGB(sample.used_bytes) : formatCPU(sample.percent);
+    }
+    if (metric.id === "disk") return formatCPU(sample.percent);
+    if (metric.id === "cpu_temperature") return `${Number(sample.celsius).toFixed(1)} °C`;
+    if (metric.id === "system_load") return Number(sample.one_minute).toFixed(2);
+    return null;
+  }
+
+  function monitorDetail(t, metric, sample, report, locale) {
+    const sampled = interpolateMessage(t("monitorSampledAt"), {
+      time: monitorTime(locale, report && report.sampled_at),
+    });
+    if (!sample || !sample.available) {
+      const path = metric.id === "disk" && sample && sample.path
+        ? interpolateMessage(t("monitorPath"), { path: sample.path })
+        : null;
+      return [t("monitorUnavailable"), sample && sample.error, path, sampled].filter(Boolean).join(" · ");
+    }
+    if (metric.id === "memory" || metric.id === "disk") {
+      const used = formatGB(sample.used_bytes);
+      const total = formatGB(sample.total_bytes);
+      const capacity = interpolateMessage(t("monitorUsedOf"), { used, total });
+      const bytes = interpolateMessage(t("monitorBytesDetail"), {
+        used: sample.used_bytes,
+        total: sample.total_bytes,
+      });
+      const path = metric.id === "disk" && sample.path
+        ? interpolateMessage(t("monitorPath"), { path: sample.path })
+        : null;
+      return [capacity, bytes, path, sampled].filter(Boolean).join(" · ");
+    }
+    const source = metric.id === "cpu"
+      ? metric.mode === "host_relative" ? t("monitorHostSource") : t("monitorTasksSource")
+      : null;
+    return [source, sampled].filter(Boolean).join(" · ");
+  }
+
+  function monitorSegment(host, t, locale, metric, report, stale) {
+    const { jsx: h } = host;
+    const sample = report && report.metrics && report.metrics[metric.id];
+    if (metric.id === "disk" && !diskMonitorVisible(metric, sample)) return null;
+    if (!sample) return null;
+    const available = Boolean(sample.available);
+    const value = monitorValue(metric, sample) || t("monitorUnavailable");
+    const progress = monitorProgressPercent(metric.id, sample);
+    const detail = monitorDetail(t, metric, sample, report, locale);
+    const inspectableDetail = stale ? `${detail} · ${t("monitorStale")}` : detail;
+    const classes = [
+      "ktm-monitor-segment",
+      stale ? "ktm-monitor-stale" : "",
+      !available ? "ktm-monitor-unavailable" : "",
+    ].filter(Boolean).join(" ");
+    return h(
+      "span",
+      {
+        key: metric.id,
+        className: classes,
+        "data-testid": `ktm-monitor-${metric.id}`,
+        "data-stale": stale ? "true" : "false",
+        title: inspectableDetail,
+      },
+      h("span", { className: "ktm-monitor-label" }, monitorMetricLabel(t, metric.id)),
+      metric.show_bar && progress !== null
+        ? h(
+            "span",
+            { className: "ktm-monitor-track", "aria-hidden": "true" },
+            h("span", {
+              className: `ktm-fill${progress >= ONE_CORE ? " ktm-fill-hot" : ""}`,
+              style: { width: monitorProgressWidth(progress) },
+            }),
+          )
+        : null,
+      h("span", { className: "ktm-monitor-value" }, value),
+    );
+  }
+
+  function makeAmbientMonitor(host, controller, openManager) {
+    const { React, jsx: h } = host;
+    const useMonitorState = makeUseMonitorState(host, controller);
+    const useSummary = makeUseSummary(host);
+
+    return function AmbientMonitor(props) {
+      const settingsState = useMonitorState();
+      const { locale, t } = usePluginTranslation(host);
+      const summary = useSummary(settingsState);
+      if (settingsState.phase !== "ready" || !summary.report || !settingsState.confirmed) return null;
+      const metrics = enabledMonitorMetrics(settingsState.confirmed);
+      const segments = metrics
+        .map((metric) => monitorSegment(host, t, locale, metric, summary.report, summary.stale))
+        .filter(Boolean);
+      if (segments.length === 0) return null;
+      const mobile = props && props.presentation === "mobile";
+      const title = interpolateMessage(t("monitorHotkeyHint"), { hotkey: HOTKEY_HINT });
+      return h(
+        "button",
+        {
+          type: "button",
+          className: "ktm-monitor",
+          style: mobile ? { minHeight: "2.75rem" } : null,
+          onClick: () => openManager(),
+          "aria-label": t("monitorOpen"),
+          title,
+          "data-testid": "ktm-host-monitor",
+        },
+        segments,
+      );
+    };
+  }
+
+  function makeMonitorSettings(host, controller) {
+    const { React, jsx: h } = host;
+    const ui = host.ui || {};
+    const SettingsCard = ui.SettingsCard || "section";
+    const CardHeader = ui.CardHeader || "div";
+    const CardTitle = ui.CardTitle || "h2";
+    const CardContent = ui.CardContent || "div";
+    const Button = ui.Button || "button";
+    const useMonitorState = makeUseMonitorState(host, controller);
+
+    function SwitchControl({ checked, onChange, id, label }) {
+      if (ui.Switch) {
+        return h(ui.Switch, {
+          id,
+          checked,
+          onCheckedChange: onChange,
+          "aria-label": label,
+        });
+      }
+      return h("input", {
+        id,
+        type: "checkbox",
+        checked,
+        onChange: (event) => onChange(event.target.checked),
+        "aria-label": label,
+      });
+    }
+
+    function CheckboxControl({ checked, onChange, id, label }) {
+      if (ui.Checkbox) {
+        return h(ui.Checkbox, {
+          id,
+          checked,
+          onCheckedChange: onChange,
+          "aria-label": label,
+        });
+      }
+      return h("input", {
+        id,
+        type: "checkbox",
+        checked,
+        onChange: (event) => onChange(event.target.checked),
+        "aria-label": label,
+      });
+    }
+
+    function SelectControl({ value, onChange, options, id, label }) {
+      return h(
+        "select",
+        {
+          id,
+          value,
+          "aria-label": label,
+          onChange: (event) => onChange(event.target.value),
+        },
+        options.map((option) => h("option", { key: option.value, value: option.value }, option.label)),
+      );
+    }
+
+    function DiskHelp({ t }) {
+      const helpId = "ktm-disk-monitor-help";
+      const help = t("monitorDiskHelp");
+      const trigger = h(
+        "button",
+        {
+          type: "button",
+          className: "ktm-help-button",
+          "aria-label": t("monitorDiskHelpLabel"),
+          "aria-describedby": helpId,
+          title: help,
+        },
+        "i",
+      );
+      if (ui.Tooltip && ui.TooltipTrigger && ui.TooltipContent) {
+        const tooltip = h(
+          ui.Tooltip,
+          null,
+          h(ui.TooltipTrigger, { asChild: true }, trigger),
+          h(ui.TooltipContent, { id: helpId }, help),
+        );
+        return ui.TooltipProvider ? h(ui.TooltipProvider, null, tooltip) : tooltip;
+      }
+      return h(
+        React.Fragment,
+        null,
+        trigger,
+        h("span", { id: helpId, className: "ktm-visually-hidden" }, help),
+      );
+    }
+
+    return function MonitorSettings() {
+      const settingsState = useMonitorState();
+      const { t } = usePluginTranslation(host);
+      const [draggedId, setDraggedId] = React.useState(null);
+      const [dragOverId, setDragOverId] = React.useState(null);
+
+      if (typeof host.useSettingsSaveContributor === "function") {
+        host.useSettingsSaveContributor({
+          id: "host-monitor-display",
+          order: 30,
+          revision: settingsState.revision || "loading",
+          isDirty: settingsState.dirty,
+          canSave: settingsState.phase === "ready" && settingsState.dirty,
+          invalidReason: settingsState.error || undefined,
+          save: (revision) => controller.save(revision),
+          discard: (revision) => controller.discard(revision),
+        });
+      }
+
+      const focusMetric = (id) => {
+        if (typeof document === "undefined") return;
+        window.setTimeout(() => {
+          document.querySelector(`[data-metric-id="${id}"] .ktm-drag-handle`)?.focus();
+        }, 0);
+      };
+      const updateMetric = (id, changes) => {
+        const draft = settingsState.draft;
+        if (!draft) return;
+        controller.setDraft({
+          version: MONITOR_SETTINGS_VERSION,
+          metrics: draft.metrics.map((metric) =>
+            metric.id === id ? { ...metric, ...changes } : metric,
+          ),
+        });
+      };
+      const move = (id, direction) => {
+        const draft = settingsState.draft;
+        if (!draft) return;
+        controller.setDraft({
+          version: MONITOR_SETTINGS_VERSION,
+          metrics: moveMonitorMetric(draft.metrics, id, direction),
+        });
+        focusMetric(id);
+      };
+      const reorder = (fromId, toId) => {
+        const draft = settingsState.draft;
+        if (!draft || !fromId || fromId === toId) return;
+        controller.setDraft({
+          version: MONITOR_SETTINGS_VERSION,
+          metrics: reorderMonitorMetrics(draft.metrics, fromId, toId),
+        });
+        focusMetric(fromId);
+      };
+
+      const card = (children) =>
+        h(
+          SettingsCard,
+          { className: "ktm-settings", "data-testid": "ktm-monitor-settings" },
+          children,
+        );
+      if (settingsState.phase === "loading") {
+        return card([
+          h(CardHeader, { key: "header" }, h(CardTitle, null, t("monitorSettingsTitle"))),
+          h(CardContent, { key: "content" }, h("p", { className: "ktm-settings-status" }, t("monitorLoading"))),
+        ]);
+      }
+      if (settingsState.phase === "error" || !settingsState.draft) {
+        return card([
+          h(CardHeader, { key: "header" }, h(CardTitle, null, t("monitorSettingsTitle"))),
+          h(
+            CardContent,
+            { key: "content" },
+            h("p", { className: "ktm-settings-status ktm-settings-status-error" }, t("monitorSettingsLoadError")),
+            h("p", { className: "ktm-settings-status ktm-settings-status-error" }, settingsState.error || t("monitorUnknownError")),
+            h(
+              Button,
+              {
+                type: "button",
+                variant: "outline",
+                onClick: () => controller.retry(),
+                "data-testid": "ktm-monitor-settings-retry",
+              },
+              t("monitorSettingsRetry"),
+            ),
+          ),
+        ]);
+      }
+
+      const metrics = settingsState.draft.metrics;
+      const updateDragState = (id) => setDragOverId(id);
+      const rows = metrics.map((metric, index) => {
+        const label = monitorMetricLabel(t, metric.id);
+        const rowClass = `ktm-setting-row${dragOverId === metric.id ? " ktm-setting-row-dragover" : ""}`;
+        const row = h(
+          "div",
+          {
+            key: metric.id,
+            className: rowClass,
+            "data-testid": `ktm-setting-row-${metric.id}`,
+            "data-metric-id": metric.id,
+            draggable: true,
+            onDragStart: (event) => {
+              setDraggedId(metric.id);
+              event.dataTransfer?.setData("text/plain", metric.id);
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+            },
+            onDragOver: (event) => {
+              event.preventDefault();
+              updateDragState(metric.id);
+            },
+            onDrop: (event) => {
+              event.preventDefault();
+              const fromId = draggedId || event.dataTransfer?.getData("text/plain");
+              reorder(fromId, metric.id);
+              setDraggedId(null);
+              setDragOverId(null);
+            },
+            onDragEnd: () => {
+              setDraggedId(null);
+              setDragOverId(null);
+            },
+          },
+          h(
+            "div",
+            { className: "ktm-setting-heading" },
+            h(
+              "button",
+              {
+                type: "button",
+                className: "ktm-drag-handle",
+                draggable: false,
+                "aria-label": `${t("monitorDragMetric")}: ${label}`,
+                onKeyDown: (event) => {
+                  if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                    event.preventDefault();
+                    move(metric.id, event.key === "ArrowUp" ? "up" : "down");
+                  }
+                },
+              },
+              "⋮⋮",
+            ),
+            h("span", { className: "ktm-setting-label" }, label),
+            metric.id === "disk" ? h(DiskHelp, { t }) : null,
+            h(
+              "div",
+              { className: "ktm-setting-actions" },
+              h(
+                Button,
+                {
+                  type: "button",
+                  className: "ktm-move-button ktm-move-up",
+                  variant: "ghost",
+                  disabled: index === 0,
+                  "aria-label": `${t("monitorMoveUp")}: ${label}`,
+                  onClick: () => move(metric.id, "up"),
+                },
+                "↑",
+              ),
+              h(
+                Button,
+                {
+                  type: "button",
+                  className: "ktm-move-button ktm-move-down",
+                  variant: "ghost",
+                  disabled: index === metrics.length - 1,
+                  "aria-label": `${t("monitorMoveDown")}: ${label}`,
+                  onClick: () => move(metric.id, "down"),
+                },
+                "↓",
+              ),
+            ),
+          ),
+          h(
+            "div",
+            { className: "ktm-setting-controls" },
+            h(
+              "label",
+              { className: "ktm-setting-control", htmlFor: `ktm-enabled-${metric.id}` },
+              h(SwitchControl, {
+                id: `ktm-enabled-${metric.id}`,
+                checked: metric.enabled,
+                onChange: (checked) => updateMetric(metric.id, { enabled: Boolean(checked) }),
+                label: `${t("monitorSettingsEnabled")}: ${label}`,
+              }),
+              t("monitorSettingsEnabled"),
+            ),
+            metric.id === "cpu"
+              ? h(
+                  React.Fragment,
+                  null,
+                  h(
+                    "label",
+                    { className: "ktm-setting-control", htmlFor: "ktm-cpu-mode" },
+                    t("monitorCpuMode"),
+                    h(SelectControl, {
+                      id: "ktm-cpu-mode",
+                      value: metric.mode,
+                      label: t("monitorCpuMode"),
+                      onChange: (mode) => updateMetric(metric.id, { mode }),
+                      options: [
+                        { value: "host_relative", label: t("monitorCpuModeHost") },
+                        { value: "tasks_relative", label: t("monitorCpuModeTasks") },
+                        { value: "tasks_per_core", label: t("monitorCpuModePerCore") },
+                      ],
+                    }),
+                  ),
+                  h(
+                    "label",
+                    { className: "ktm-setting-control", htmlFor: "ktm-bar-cpu" },
+                    h(CheckboxControl, {
+                      id: "ktm-bar-cpu",
+                      checked: metric.show_bar,
+                      onChange: (show_bar) => updateMetric(metric.id, { show_bar: Boolean(show_bar) }),
+                      label: `${t("monitorSettingsBar")}: ${label}`,
+                    }),
+                    t("monitorSettingsBar"),
+                  ),
+                )
+              : null,
+            metric.id === "memory"
+              ? h(
+                  React.Fragment,
+                  null,
+                  h(
+                    "label",
+                    { className: "ktm-setting-control", htmlFor: "ktm-memory-unit" },
+                    t("monitorMemoryUnit"),
+                    h(SelectControl, {
+                      id: "ktm-memory-unit",
+                      value: metric.unit,
+                      label: t("monitorMemoryUnit"),
+                      onChange: (unit) => updateMetric(metric.id, { unit }),
+                      options: [
+                        { value: "percent", label: t("monitorMemoryUnitPercent") },
+                        { value: "gb", label: t("monitorMemoryUnitGB") },
+                      ],
+                    }),
+                  ),
+                  h(
+                    "label",
+                    { className: "ktm-setting-control", htmlFor: "ktm-bar-memory" },
+                    h(CheckboxControl, {
+                      id: "ktm-bar-memory",
+                      checked: metric.show_bar,
+                      onChange: (show_bar) => updateMetric(metric.id, { show_bar: Boolean(show_bar) }),
+                      label: `${t("monitorSettingsBar")}: ${label}`,
+                    }),
+                    t("monitorSettingsBar"),
+                  ),
+                )
+              : null,
+            metric.id === "disk"
+              ? h(
+                  React.Fragment,
+                  null,
+                  h(
+                    "label",
+                    { className: "ktm-setting-control", htmlFor: "ktm-disk-visibility" },
+                    t("monitorDiskVisibility"),
+                    h(SelectControl, {
+                      id: "ktm-disk-visibility",
+                      value: metric.visibility,
+                      label: t("monitorDiskVisibility"),
+                      onChange: (visibility) => updateMetric(metric.id, { visibility }),
+                      options: [
+                        { value: "always", label: t("monitorDiskVisibilityAlways") },
+                        { value: "threshold", label: t("monitorDiskVisibilityThreshold") },
+                      ],
+                    }),
+                  ),
+                  metric.visibility === "threshold"
+                    ? h(
+                        "label",
+                        { className: "ktm-setting-control", htmlFor: "ktm-disk-threshold" },
+                        t("monitorDiskThreshold"),
+                        h("input", {
+                          id: "ktm-disk-threshold",
+                          type: "number",
+                          min: 1,
+                          max: 100,
+                          step: 1,
+                          value: metric.threshold_percent,
+                          onChange: (event) => updateMetric(metric.id, {
+                            threshold_percent: Number(event.target.value),
+                          }),
+                        }),
+                      )
+                    : null,
+                  h(
+                    "label",
+                    { className: "ktm-setting-control", htmlFor: "ktm-bar-disk" },
+                    h(CheckboxControl, {
+                      id: "ktm-bar-disk",
+                      checked: metric.show_bar,
+                      onChange: (show_bar) => updateMetric(metric.id, { show_bar: Boolean(show_bar) }),
+                      label: `${t("monitorSettingsBar")}: ${label}`,
+                    }),
+                    t("monitorSettingsBar"),
+                  ),
+                )
+              : null,
+          ),
+        );
+        return row;
+      });
+
+      return card([
+        h(CardHeader, { key: "header" }, h(CardTitle, null, t("monitorSettingsTitle"))),
+        h(
+          CardContent,
+          { key: "content" },
+          h("p", { className: "ktm-settings-description" }, t("monitorSettingsDescription")),
+          settingsState.conflict
+            ? h("p", { className: "ktm-settings-status ktm-settings-status-conflict", role: "alert" }, t("monitorSettingsConflict"))
+            : null,
+          settingsState.error
+            ? h("p", { className: "ktm-settings-status ktm-settings-status-error", role: "alert" }, settingsState.error)
+            : null,
+          h("div", { className: "ktm-settings-list" }, rows),
+          enabledMonitorMetrics(settingsState.draft).length === 0
+            ? h("p", { className: "ktm-settings-status" }, t("monitorNoEnabledMetrics"))
+            : null,
+        ),
+      ]);
+    };
   }
 
   function percentWidth(fraction) {
@@ -627,38 +2057,54 @@
       const [state, setState] = React.useState({ loading: true, error: null, report: null });
       const timer = React.useRef(null);
 
-      const load = React.useCallback((quiet) => {
-        if (!quiet) setState((s) => ({ ...s, loading: !s.report, error: null }));
-        return host.api
-          // POST, not GET, and deliberately so. Kandev requires a valid
-          // Origin header on session-authenticated webhook calls as CSRF
-          // protection — but browsers omit Origin on same-origin GET
-          // requests, so a GET poll is rejected 403 on every instance that
-          // has authentication enabled. A POST always carries Origin.
-          .fetch("webhooks/usage", { method: "POST" })
-          .then(async (res) => {
-            const body = await res.json();
-            if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      React.useEffect(() => {
+        let alive = true;
+        let active = null;
+        const schedule = () => {
+          if (!alive || !pollMs) return;
+          timer.current = setTimeout(() => load(true), pollMs);
+        };
+        const load = async (quiet) => {
+          if (!alive) return;
+          if (active) active.abort();
+          active = new AbortController();
+          if (!quiet) setState((s) => ({ ...s, loading: !s.report, error: null }));
+          try {
+            // POST, not GET, and deliberately so. Kandev requires a valid
+            // Origin header on session-authenticated webhook calls as CSRF
+            // protection — browsers omit Origin on same-origin GET requests.
+            const response = await host.api.fetch("webhooks/usage", {
+              method: "POST",
+              signal: active.signal,
+            });
+            const body = await response.json();
+            if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+            if (!alive) return;
             setState({ loading: false, error: null, report: body });
-          })
-          .catch((err) =>
+          } catch (error) {
+            if (!alive || error?.name === "AbortError") return;
             // Keep the last good report on screen through a transient failure:
             // a monitor that blanks itself on one dropped poll is worse than
             // one showing a reading a second or two old.
-            setState((s) => ({ loading: false, error: String(err.message || err), report: s.report })),
-          );
-      }, []);
-
-      React.useEffect(() => {
+            setState((s) => ({
+              loading: false,
+              error: String(error?.message || error),
+              report: s.report,
+            }));
+          } finally {
+            schedule();
+          }
+        };
         load(false);
-        if (pollMs) {
-          timer.current = setInterval(() => load(true), pollMs);
-          return () => clearInterval(timer.current);
-        }
-        return undefined;
-      }, [load, pollMs]);
+        return () => {
+          alive = false;
+          if (active) active.abort();
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = null;
+        };
+      }, [host, pollMs]);
 
-      return { ...state, reload: () => load(false) };
+      return { ...state, reload: () => undefined };
     };
   }
 
@@ -1038,42 +2484,7 @@
     };
   }
 
-  // The top-bar chip: ambient total CPU, and a second way into the modal for
-  // anyone who does not know the hotkey.
-  function makeChip(host, openManager) {
-    const { jsx: h } = host;
-    const useUsage = makeUseUsage(host);
-
-    return function TaskManagerChip(props) {
-      const { report } = useUsage(CHIP_POLL_MS);
-      const mobile = props && props.presentation === "mobile";
-      const tasks = (report && report.tasks) || [];
-      const cores = (report && report.cpu_cores) || 1;
-      const totalCPU = tasks.reduce((sum, t) => sum + t.cpu_percent, 0);
-
-      return h(
-        "button",
-        {
-          type: "button",
-          className: "ktm-chip",
-          style: mobile ? { minHeight: "2.75rem", padding: "0 0.75rem" } : null,
-          onClick: () => openManager(),
-          "aria-label": `Open ${TITLE}`,
-          title: `${TITLE}  ·  ${HOTKEY_HINT}`,
-        },
-        h("span", { className: "ktm-chip-label" }, "CPU"),
-        h(
-          "span",
-          { className: "ktm-chip-track" },
-          h("span", {
-            className: `ktm-fill${totalCPU >= ONE_CORE ? " ktm-fill-hot" : ""}`,
-            style: { width: percentWidth(totalCPU / (cores * ONE_CORE)) },
-          }),
-        ),
-        h("span", { className: "ktm-chip-value" }, formatCPU(totalCPU)),
-      );
-    };
-  }
+  let activeMonitorController = null;
 
   window.registerKandevPlugin(PLUGIN_ID, {
     initialize(registry, host) {
@@ -1095,14 +2506,22 @@
         handle = host.openModal({ title: TITLE, content: Panel, size: "lg" });
       };
 
+      if (activeMonitorController) activeMonitorController.destroy();
+      const monitorController = createMonitorController(host);
+      activeMonitorController = monitorController;
+      monitorController.start();
+      registry.registerTranslations(TRANSLATIONS);
       registry.registerKeybinding("open-task-manager", () => openManager());
-      registry.registerComponent("main-top-bar", makeChip(host, openManager));
+      registry.registerComponent("main-top-bar", makeAmbientMonitor(host, monitorController, openManager));
+      registry.registerComponent("plugin-settings", makeMonitorSettings(host, monitorController));
     },
 
     // The host revokes slots, keybindings and modals itself, but its style
     // cleanup only looks for <link> elements, so the injected <style> is this
     // plugin's to remove.
     destroy() {
+      if (activeMonitorController) activeMonitorController.destroy();
+      activeMonitorController = null;
       const style = document.getElementById(STYLE_ELEMENT_ID);
       if (style) style.remove();
     },

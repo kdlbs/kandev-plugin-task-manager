@@ -142,28 +142,66 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 // one is missing or stale. Callers must serialize calls; plugin.go holds a
 // mutex across the whole request for that reason.
 func (s *sampler) sample(ctx context.Context) (*snapshot, error) {
-	if s.prevCPU == nil || s.now().Sub(s.prevAt) > staleAfter {
-		if err := s.baseline(ctx); err != nil {
-			return nil, err
-		}
-	}
-	if wait := sampleWindow - s.now().Sub(s.prevAt); wait > 0 {
-		if err := s.sleep(ctx, wait); err != nil {
-			return nil, err
-		}
-	}
-
-	current, err := s.scanner.scan()
+	current, now, interval, err := s.readCPUWindow(ctx)
 	if err != nil {
 		return nil, err
 	}
-	now := s.now()
-	interval := now.Sub(s.prevAt).Seconds()
 	snap := s.build(current, now, interval)
 
 	s.prevCPU = cpuByKey(current)
 	s.prevAt = now
 	return snap, nil
+}
+
+// sampleTaskCPU is the ambient task path. It deliberately shares the stable
+// process attribution and CPU baseline with sample, but does not call
+// memoryFor, build, or the task title API.
+func (s *sampler) sampleTaskCPU(ctx context.Context, cores int) (float64, float64, error) {
+	current, now, interval, err := s.readCPUWindow(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	owners := s.attribute(current)
+	var total float64
+	for _, sample := range current {
+		if _, ok := owners[sample.PID]; !ok {
+			continue
+		}
+		previous, seen := s.prevCPU[sample.StartKey]
+		if !seen || interval <= 0 {
+			continue
+		}
+		if delta := sample.CPUSeconds - previous; delta > 0 {
+			total += delta / interval * 100
+		}
+	}
+	s.prevCPU = cpuByKey(current)
+	s.prevAt = now
+	if cores < 1 {
+		cores = 1
+	}
+	return total, clampPercent(total / float64(cores)), nil
+}
+
+// readCPUWindow establishes a fresh baseline after a cold or stale gap and
+// returns the next process table after the short rate window.
+func (s *sampler) readCPUWindow(ctx context.Context) ([]procSample, time.Time, float64, error) {
+	if s.prevCPU == nil || s.now().Sub(s.prevAt) > staleAfter {
+		if err := s.baseline(ctx); err != nil {
+			return nil, time.Time{}, 0, err
+		}
+	}
+	if wait := sampleWindow - s.now().Sub(s.prevAt); wait > 0 {
+		if err := s.sleep(ctx, wait); err != nil {
+			return nil, time.Time{}, 0, err
+		}
+	}
+	current, err := s.scanner.scan()
+	if err != nil {
+		return nil, time.Time{}, 0, err
+	}
+	now := s.now()
+	return current, now, now.Sub(s.prevAt).Seconds(), nil
 }
 
 func (s *sampler) baseline(ctx context.Context) error {
