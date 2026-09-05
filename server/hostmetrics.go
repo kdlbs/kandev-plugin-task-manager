@@ -26,6 +26,7 @@ var (
 type monitorConfig struct {
 	RefreshIntervalSeconds int
 	DiskPath               string
+	DiskPathError          string
 }
 
 func defaultMonitorConfig() monitorConfig {
@@ -101,7 +102,9 @@ func normalizeMonitorConfig(raw map[string]any) (monitorConfig, error) {
 		path, ok := value.(string)
 		path = strings.TrimSpace(path)
 		if !ok || path == "" {
-			return monitorConfig{}, fmt.Errorf("%w: disk_path must be a non-empty string", errInvalidMonitorConfig)
+			config.DiskPath = ""
+			config.DiskPathError = "disk_path must be a non-empty string"
+			return config, nil
 		}
 		config.DiskPath = path
 	}

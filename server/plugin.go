@@ -250,7 +250,7 @@ func (p *taskManagerPlugin) sampleSummaryMetric(ctx context.Context, id, cpuSour
 	case "memory":
 		return p.sampleSummaryMemory()
 	case "disk":
-		return p.sampleSummaryDisk(ctx, config.DiskPath)
+		return p.sampleSummaryDisk(ctx, config.DiskPath, config.DiskPathError)
 	case "cpu_temperature":
 		return p.sampleSummaryTemperature()
 	case "system_load":
@@ -297,9 +297,13 @@ func (p *taskManagerPlugin) sampleSummaryMemory() summaryMetric {
 	}
 }
 
-func (p *taskManagerPlugin) sampleSummaryDisk(ctx context.Context, path string) summaryMetric {
-	reading, err := p.hostMetrics.sampleDisk(ctx, path)
+func (p *taskManagerPlugin) sampleSummaryDisk(ctx context.Context, path, pathError string) summaryMetric {
 	metric := summaryMetric{Path: path}
+	if pathError != "" {
+		metric.Error = boundedMetricError(errors.New(pathError))
+		return metric
+	}
+	reading, err := p.hostMetrics.sampleDisk(ctx, path)
 	if err != nil {
 		metric.Error = boundedMetricError(err)
 		return metric

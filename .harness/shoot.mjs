@@ -197,9 +197,10 @@ await page.setViewportSize({ width: 390, height: 844 });
 const mobileMonitor = await page.locator("[data-testid=ktm-host-monitor]").evaluate((element) => ({
   height: Math.round(element.getBoundingClientRect().height),
   bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+  richStatus: element.getAttribute("data-main-top-bar-rich"),
 }));
 console.log("mobile monitor:", JSON.stringify(mobileMonitor));
-if (mobileMonitor.height < 44 || mobileMonitor.bodyOverflow > 1) {
+if (mobileMonitor.height < 44 || mobileMonitor.bodyOverflow > 1 || mobileMonitor.richStatus !== "true") {
   console.error("FAIL: mobile monitor is not touch-sized or overflows");
   process.exitCode = 1;
 }

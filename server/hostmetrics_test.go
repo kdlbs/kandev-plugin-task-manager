@@ -64,7 +64,14 @@ func TestNormalizeMonitorConfig(t *testing.T) {
 		},
 		{name: "bad interval", raw: map[string]any{"refresh_interval_seconds": 0}, err: true},
 		{name: "fractional interval", raw: map[string]any{"refresh_interval_seconds": 1.5}, err: true},
-		{name: "bad path", raw: map[string]any{"disk_path": "  "}, err: true},
+		{
+			name: "bad path only disables disk",
+			raw:  map[string]any{"disk_path": "  "},
+			want: monitorConfig{
+				RefreshIntervalSeconds: defaultRefreshIntervalSeconds,
+				DiskPathError:          "disk_path must be a non-empty string",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -153,5 +160,42 @@ func TestHostSummaryKeepsIndependentMetricFailures(t *testing.T) {
 	}
 	if report.Metrics["cpu_temperature"].Available || report.Metrics["cpu_temperature"].Error == "" {
 		t.Fatalf("temperature failure was not represented: %+v", report.Metrics["cpu_temperature"])
+	}
+}
+
+func TestHostSummaryInvalidDiskPathKeepsIndependentMetrics(t *testing.T) {
+	reader := &fakeHostMetricsReader{
+		cpu:    []hostCPUTimes{{Total: 100, Idle: 50}, {Total: 180, Idle: 90}},
+		memory: hostMemoryReading{UsedBytes: 4, TotalBytes: 10},
+		load:   1.25,
+	}
+	p := newPlugin()
+	p.hostMetrics = newHostMetricsCollector(reader)
+	p.hostMetrics.sleep = func(context.Context, time.Duration) error { return nil }
+
+	response, err := p.sampleSummary(context.Background(), summaryRequest{
+		MetricIDs: []string{"cpu", "memory", "disk", "system_load"},
+		CPUSource: "host",
+	}, monitorConfig{
+		RefreshIntervalSeconds: defaultRefreshIntervalSeconds,
+		DiskPathError:          "disk_path must be a non-empty string",
+	})
+	if err != nil {
+		t.Fatalf("sampleSummary: %v", err)
+	}
+	if response.Status != 200 {
+		t.Fatalf("status = %d, body = %s", response.Status, response.Body)
+	}
+	var report summaryReport
+	if err := json.Unmarshal(response.Body, &report); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	for _, id := range []string{"cpu", "memory", "system_load"} {
+		if !report.Metrics[id].Available {
+			t.Fatalf("%s unexpectedly unavailable: %+v", id, report.Metrics[id])
+		}
+	}
+	if report.Metrics["disk"].Available || report.Metrics["disk"].Error == "" {
+		t.Fatalf("invalid disk path was not isolated: %+v", report.Metrics["disk"])
 	}
 }
