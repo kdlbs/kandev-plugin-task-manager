@@ -29,7 +29,8 @@ config_schema:
       type: integer
       title: "Ambient refresh interval"
       description: "Seconds between Task Manager top-bar updates."
-      enum: [1, 2, 5, 10, 30, 60, 120, 300]
+      minimum: 1
+      maximum: 300
       default: 5
     disk_path:
       type: string

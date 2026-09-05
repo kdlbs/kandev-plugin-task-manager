@@ -1506,6 +1506,7 @@
 
   function makeAmbientMonitor(host, controller, openManager) {
     const { React, jsx: h } = host;
+    const MonitorButton = host.ui?.Button || "button";
     const useMonitorState = makeUseMonitorState(host, controller);
     const useSummary = makeUseSummary(host);
 
@@ -1522,14 +1523,20 @@
       const mobile = props && props.presentation === "mobile";
       const title = interpolateMessage(t("monitorHotkeyHint"), { hotkey: HOTKEY_HINT });
       return h(
-        "button",
+        MonitorButton,
         {
           type: "button",
+          variant: "outline",
+          size: "lg",
           className: "ktm-monitor",
           style: mobile ? { minHeight: "2.75rem" } : null,
           onClick: () => openManager(),
           "aria-label": t("monitorOpen"),
           title,
+          // The host keeps ordinary mobile icon actions compact. This
+          // contribution contains ordered values, so it opts into the rich
+          // status-control contract and owns its 44px touch geometry.
+          "data-main-top-bar-rich": "true",
           "data-testid": "ktm-host-monitor",
         },
         segments,

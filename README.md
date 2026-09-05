@@ -49,8 +49,9 @@ uses 100% for one logical core and can exceed 100% for parallel work.
 
 Host monitor display choices are personal and sync through Kandev's per-user
 plugin storage. The refresh interval and disk path are administrator settings;
-they apply to all users of the installation. A failed or unsupported reading is
-shown as unavailable instead of as zero.
+they apply to all users of the installation. The refresh interval accepts any
+whole-second value from 1 through 300. A failed or unsupported reading is shown
+as unavailable instead of as zero.
 
 Disk monitoring reads filesystem capacity metadata for the configured path. It
 does not scan files or directories. A disk visibility threshold hides the
