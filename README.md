@@ -83,8 +83,9 @@ Download the tarball from [Releases](../../releases), then either:
 - **Settings → Plugins → Install** and upload it, or
 - drop it in `~/.kandev/plugins/` and press **Sync**.
 
-The hotkey is remappable in **Settings → Keyboard shortcuts**. A CPU chip also
-appears in the top bar on the Kanban and Tasks views, and opens the same panel.
+The hotkey is remappable in **Settings → Plugins → Task Manager**. A CPU chip
+also appears in the top bar on the Kanban and Tasks views, and opens the same
+panel.
 
 ![The panel open over the Kanban board, with the CPU chip in the top bar](docs/media/in-app.png)
 
