@@ -97,22 +97,62 @@ console.log("grouping:", JSON.stringify(grouping));
 const chip = await page.evaluate(() => {
   const value = document.querySelector(".ktm-monitor-value");
   if (!value) return null;
-  return { color: getComputedStyle(value).color, text: value.innerText };
+  const monitor = document.querySelector("[data-testid=ktm-host-monitor]");
+  return {
+    color: getComputedStyle(value).color,
+    text: value.innerText,
+    accessibleLabel: monitor?.getAttribute("aria-label") || null,
+  };
 });
 console.log("host monitor value:", JSON.stringify(chip));
-if (!chip || !chip.text || chip.color === "rgb(128, 128, 128)") {
+if (
+  !chip ||
+  !chip.text ||
+  chip.color === "rgb(128, 128, 128)" ||
+  !chip.accessibleLabel?.includes("CPU") ||
+  !chip.accessibleLabel.includes(chip.text)
+) {
   console.error("FAIL: host monitor did not render a readable value");
   process.exitCode = 1;
 }
+
+// A successful 300-second response must control the retry after a transient
+// error. This fires the pending production timer directly so the test stays
+// fast while still exercising the actual useSummary closure.
+await page.evaluate(() => window.__setSummaryFailure(true));
+await page.evaluate(async () => {
+  await window.__runScheduledTimer(300000);
+});
+await page.waitForTimeout(100);
+const retryCadence = await page.evaluate(() => ({
+  pending: window.__pendingTimerDelays(),
+  accessibleLabel: document.querySelector("[data-testid=ktm-host-monitor]")?.getAttribute("aria-label") || null,
+}));
+console.log("summary retry cadence and accessible state:", JSON.stringify(retryCadence));
+if (!retryCadence.pending.includes(300000) || retryCadence.pending.includes(5000) || !retryCadence.accessibleLabel?.includes("stale")) {
+  console.error("FAIL: summary retry cadence or stale accessible status regressed");
+  process.exitCode = 1;
+}
+await page.evaluate(() => {
+  window.__setSummaryFailure(false);
+  window.__setSummaryInterval(1);
+});
 
 const settingsShape = await page.evaluate(() => ({
   rows: document.querySelectorAll("[data-testid^=ktm-monitor-settings] [data-metric-id]").length,
   diskHelpLabel: document.querySelector(".ktm-help-button")?.getAttribute("aria-label") || null,
   diskHelpRelation: document.querySelector(".ktm-help-button")?.getAttribute("aria-describedby") || null,
   diskHelpText: document.getElementById("ktm-disk-monitor-help")?.textContent || null,
+  initialRequest: window.__lastSummaryRequest(),
 }));
 console.log("settings shape:", JSON.stringify(settingsShape));
-if (settingsShape.rows !== 5 || !settingsShape.diskHelpLabel || !settingsShape.diskHelpRelation || !settingsShape.diskHelpText) {
+if (
+  settingsShape.rows !== 5 ||
+  !settingsShape.diskHelpLabel ||
+  !settingsShape.diskHelpRelation ||
+  !settingsShape.diskHelpText ||
+  JSON.stringify(settingsShape.initialRequest) !== JSON.stringify({ metric_ids: ["cpu"], cpu_source: "tasks" })
+) {
   console.error("FAIL: monitor settings or disk help is incomplete");
   process.exitCode = 1;
 }

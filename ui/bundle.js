@@ -29,6 +29,8 @@
   // which is what keeps each active poll a cheap warm one.
   const PANEL_POLL_MS = 1200;
   const DEFAULT_MONITOR_INTERVAL_MS = 5000;
+  const MIN_MONITOR_INTERVAL_MS = 1000;
+  const MAX_MONITOR_INTERVAL_MS = 300000;
   const MONITOR_SETTINGS_VERSION = 1;
   const MONITOR_STORAGE_SCOPE = "instance";
   const MONITOR_STORAGE_SCOPE_ID = "profile";
@@ -1129,6 +1131,12 @@
     return `${Math.max(1.5, percent)}%`;
   }
 
+  function monitorIntervalMilliseconds(value) {
+    const seconds = Number(value);
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 300) return null;
+    return Math.min(MAX_MONITOR_INTERVAL_MS, Math.max(MIN_MONITOR_INTERVAL_MS, seconds * 1000));
+  }
+
   function createMonitorController(host) {
     let state = {
       phase: "loading",
@@ -1320,6 +1328,11 @@
       React.useEffect(() => {
         let alive = true;
         const requestController = new AbortController();
+        // Keep the last administrator-approved cadence across transient
+        // failures. Falling back to five seconds after a successful 300s
+        // response defeats the install-wide cost control exactly when the
+        // host is already under pressure.
+        let effectiveIntervalMs = DEFAULT_MONITOR_INTERVAL_MS;
         const confirmed = settingsState.confirmed;
         const enabled = confirmed ? enabledMonitorMetrics(confirmed) : [];
 
@@ -1352,8 +1365,9 @@
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
             if (!alive) return;
             setState({ loading: false, error: null, report: body, stale: false });
-            const seconds = Number(body.refresh_interval_seconds);
-            schedule(Number.isFinite(seconds) ? seconds * 1000 : DEFAULT_MONITOR_INTERVAL_MS);
+            const intervalMs = monitorIntervalMilliseconds(body.refresh_interval_seconds);
+            if (intervalMs !== null) effectiveIntervalMs = intervalMs;
+            schedule(effectiveIntervalMs);
           } catch (error) {
             if (!alive || error?.name === "AbortError") return;
             setState((previous) => ({
@@ -1362,7 +1376,7 @@
               report: previous.report,
               stale: Boolean(previous.report),
             }));
-            schedule(DEFAULT_MONITOR_INTERVAL_MS);
+            schedule(effectiveIntervalMs);
           }
         };
 
@@ -1504,6 +1518,15 @@
     );
   }
 
+  function monitorAccessibleSegment(t, locale, metric, report, stale) {
+    const sample = report && report.metrics && report.metrics[metric.id];
+    if (!sample) return null;
+    const value = monitorValue(metric, sample) || t("monitorUnavailable");
+    const detail = monitorDetail(t, metric, sample, report, locale);
+    const state = stale ? ` · ${t("monitorStale")}` : "";
+    return `${monitorMetricLabel(t, metric.id)}: ${value} (${detail}${state})`;
+  }
+
   function makeAmbientMonitor(host, controller, openManager) {
     const { React, jsx: h } = host;
     const MonitorButton = host.ui?.Button || "button";
@@ -1516,10 +1539,16 @@
       const summary = useSummary(settingsState);
       if (settingsState.phase !== "ready" || !summary.report || !settingsState.confirmed) return null;
       const metrics = enabledMonitorMetrics(settingsState.confirmed);
-      const segments = metrics
+      const visibleMetrics = metrics.filter((metric) =>
+        metric.id !== "disk" || diskMonitorVisible(metric, summary.report.metrics?.disk),
+      );
+      const segments = visibleMetrics
         .map((metric) => monitorSegment(host, t, locale, metric, summary.report, summary.stale))
         .filter(Boolean);
       if (segments.length === 0) return null;
+      const accessibleSegments = visibleMetrics
+        .map((metric) => monitorAccessibleSegment(t, locale, metric, summary.report, summary.stale))
+        .filter(Boolean);
       const mobile = props && props.presentation === "mobile";
       const title = interpolateMessage(t("monitorHotkeyHint"), { hotkey: HOTKEY_HINT });
       return h(
@@ -1531,7 +1560,10 @@
           className: "ktm-monitor",
           style: mobile ? { minHeight: "2.75rem" } : null,
           onClick: () => openManager(),
-          "aria-label": t("monitorOpen"),
+          // aria-label replaces the button's descendant text in the
+          // accessibility tree. Include the ordered values and their state
+          // here so a screen reader does not hear only "Open…".
+          "aria-label": `${t("monitorOpen")}: ${accessibleSegments.join("; ")}`,
           title,
           // The host keeps ordinary mobile icon actions compact. This
           // contribution contains ordered values, so it opts into the rich

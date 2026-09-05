@@ -26,7 +26,6 @@ test-release-version:
 
 test-harness-server:
 	node --test .harness/server.test.mjs
-
 test-harness:
 	npm run test:layout --prefix .harness
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -14,6 +15,13 @@ import (
 type windowsHostMetricsReader struct{}
 
 var monitorGetSystemTimes = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetSystemTimes")
+
+const (
+	windowsDiskCallTimeout = 2 * time.Second
+	windowsDiskSlotWait    = 250 * time.Millisecond
+)
+
+var windowsDiskCallSlot = make(chan struct{}, 1)
 
 func newHostMetricsReader() hostMetricsReader { return &windowsHostMetricsReader{} }
 
@@ -57,14 +65,43 @@ func (windowsHostMetricsReader) readDisk(ctx context.Context, path string) (host
 	if err != nil {
 		return hostDiskReading{}, err
 	}
-	var freeToCaller, total, free uint64
-	if err := windows.GetDiskFreeSpaceEx(pathPtr, &freeToCaller, &total, &free); err != nil {
-		return hostDiskReading{}, err
+	waitTimer := time.NewTimer(windowsDiskSlotWait)
+	defer waitTimer.Stop()
+	select {
+	case windowsDiskCallSlot <- struct{}{}:
+	case <-ctx.Done():
+		return hostDiskReading{}, ctx.Err()
+	case <-waitTimer.C:
+		return hostDiskReading{}, errors.New("filesystem capacity lookup is busy")
 	}
-	if err := ctx.Err(); err != nil {
-		return hostDiskReading{}, err
+
+	type diskResult struct {
+		freeToCaller uint64
+		total        uint64
+		free         uint64
+		err          error
 	}
-	return diskCapacityFromBytes(total, freeToCaller)
+	result := make(chan diskResult, 1)
+	go func() {
+		defer func() { <-windowsDiskCallSlot }()
+		var freeToCaller, total, free uint64
+		callErr := windows.GetDiskFreeSpaceEx(pathPtr, &freeToCaller, &total, &free)
+		result <- diskResult{freeToCaller: freeToCaller, total: total, free: free, err: callErr}
+	}()
+
+	callTimer := time.NewTimer(windowsDiskCallTimeout)
+	defer callTimer.Stop()
+	select {
+	case <-ctx.Done():
+		return hostDiskReading{}, ctx.Err()
+	case <-callTimer.C:
+		return hostDiskReading{}, errors.New("filesystem capacity lookup timed out")
+	case response := <-result:
+		if response.err != nil {
+			return hostDiskReading{}, response.err
+		}
+		return diskCapacityFromBytes(response.total, response.freeToCaller)
+	}
 }
 
 func (windowsHostMetricsReader) readTemperature() (float64, error) {

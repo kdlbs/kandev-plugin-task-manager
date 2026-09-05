@@ -1,6 +1,47 @@
 // Renders the shipped bundle against deterministic task and process fixtures.
 (function () {
   const CORES = 8;
+
+  // Keep timer callbacks controllable for the cadence assertion in shoot.mjs.
+  // The production bundle still uses the browser timers; this only lets the
+  // harness fire a long (300s) retry without waiting five minutes.
+  const nativeSetTimeout = window.setTimeout.bind(window);
+  const nativeClearTimeout = window.clearTimeout.bind(window);
+  const scheduledTimers = new Set();
+  window.setTimeout = (callback, delay, ...args) => {
+    const record = {
+      callback,
+      delay: Number(delay) || 0,
+      args,
+      id: null,
+    };
+    const wrapped = () => {
+      scheduledTimers.delete(record);
+      callback(...args);
+    };
+    record.id = nativeSetTimeout(wrapped, delay);
+    scheduledTimers.add(record);
+    return record.id;
+  };
+  window.clearTimeout = (id) => {
+    for (const record of scheduledTimers) {
+      if (record.id !== id) continue;
+      scheduledTimers.delete(record);
+      break;
+    }
+    return nativeClearTimeout(id);
+  };
+  window.__pendingTimerDelays = () =>
+    [...scheduledTimers].filter((record) => record.id !== null).map((record) => record.delay);
+  window.__runScheduledTimer = (minimumDelay = 0) => {
+    const record = [...scheduledTimers]
+      .reverse()
+      .find((candidate) => candidate.delay >= minimumDelay);
+    if (!record) throw new Error(`no pending timer at least ${minimumDelay}ms`);
+    scheduledTimers.delete(record);
+    nativeClearTimeout(record.id);
+    return record.callback(...record.args);
+  };
   const LONG_CMD =
     "node ./fixtures/fake-worker.js --mode=sample --input=synthetic-value --payload=" + "x".repeat(512);
 
@@ -171,6 +212,8 @@
   let poll = 0;
   let summaryFetches = 0;
   let lastSummaryRequest = null;
+  let summaryIntervalSeconds = 300;
+  let summaryShouldFail = false;
   function reportForPoll() {
     poll += 1;
     const swing = poll % 2 === 0;
@@ -187,6 +230,12 @@
   window.__pollCount = () => poll;
   window.__summaryFetchCount = () => summaryFetches;
   window.__lastSummaryRequest = () => clone(lastSummaryRequest);
+  window.__setSummaryInterval = (seconds) => {
+    summaryIntervalSeconds = seconds;
+  };
+  window.__setSummaryFailure = (shouldFail) => {
+    summaryShouldFail = Boolean(shouldFail);
+  };
   // Lets the ordering test restart the climbing task from idle, so its rank
   // is measured from a known starting point rather than wherever the earlier
   // steps happened to leave it.
@@ -212,6 +261,13 @@
       fetch: (path, options = {}) => {
         if (path === "webhooks/summary") {
           summaryFetches += 1;
+          if (summaryShouldFail) {
+            return Promise.resolve({
+              ok: false,
+              status: 503,
+              json: () => Promise.resolve({ error: "summary unavailable" }),
+            });
+          }
           let request = {};
           try {
             request = JSON.parse(options.body || "{}");
@@ -254,7 +310,7 @@
             ok: true,
             json: () => Promise.resolve({
               sampled_at: new Date().toISOString(),
-              refresh_interval_seconds: 1,
+              refresh_interval_seconds: summaryIntervalSeconds,
               cpu_cores: CORES,
               metrics,
             }),

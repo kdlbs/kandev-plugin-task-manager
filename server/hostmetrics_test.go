@@ -22,6 +22,8 @@ type fakeHostMetricsReader struct {
 	diskErr     error
 	tempErr     error
 	loadErr     error
+	diskStarted chan<- struct{}
+	diskRelease <-chan struct{}
 }
 
 func (f *fakeHostMetricsReader) readCPUTimes() (hostCPUTimes, error) {
@@ -37,7 +39,20 @@ func (f *fakeHostMetricsReader) readMemory() (hostMemoryReading, error) {
 	return f.memory, f.memoryErr
 }
 
-func (f *fakeHostMetricsReader) readDisk(_ context.Context, _ string) (hostDiskReading, error) {
+func (f *fakeHostMetricsReader) readDisk(ctx context.Context, _ string) (hostDiskReading, error) {
+	if f.diskStarted != nil {
+		select {
+		case f.diskStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.diskRelease != nil {
+		select {
+		case <-f.diskRelease:
+		case <-ctx.Done():
+			return hostDiskReading{}, ctx.Err()
+		}
+	}
 	return f.disk, f.diskErr
 }
 
@@ -123,8 +138,8 @@ func TestHostCPUSamplingReturnsCoreAndHostPercent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sampleHostCPU: %v", err)
 	}
-	if core != 2 || relative != 50 {
-		t.Fatalf("CPU = %.2f core, %.2f relative; want 2, 50", core, relative)
+	if core != 200 || relative != 50 {
+		t.Fatalf("CPU = %.2f core, %.2f relative; want 200, 50", core, relative)
 	}
 }
 

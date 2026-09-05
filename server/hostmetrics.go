@@ -244,7 +244,9 @@ func (c *hostMetricsCollector) sampleHostCPU(ctx context.Context) (float64, floa
 	if cores < 1 {
 		cores = 1
 	}
-	return percent * float64(cores) / 100, percent, nil
+	// core_percent is deliberately expressed in the same percentage unit as
+	// task CPU: 50% on four logical cores is 200%, or two fully busy cores.
+	return percent * float64(cores), percent, nil
 }
 
 func (c *hostMetricsCollector) sampleMemory() (hostMemoryReading, float64, error) {
