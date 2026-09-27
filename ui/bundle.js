@@ -531,6 +531,26 @@
     return `${clamped === 0 ? 0 : Math.max(1.5, clamped * 100)}%`;
   }
 
+  function cpuIcon(h) {
+    return h(
+      "svg",
+      {
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth: "1.75",
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        "aria-hidden": "true",
+        focusable: "false",
+      },
+      h("rect", { x: "6", y: "6", width: "12", height: "12", rx: "2" }),
+      h("path", {
+        d: "M9 9h6v6H9zM9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4",
+      }),
+    );
+  }
+
   // A task whose processes exist but whose kandev row does not: deleted while
   // its agent was still winding down. Showing the bare id is the honest
   // rendering — it is still consuming the machine.
@@ -1041,15 +1061,38 @@
   // The top-bar chip: ambient total CPU, and a second way into the modal for
   // anyone who does not know the hotkey.
   function makeChip(host, openManager) {
-    const { jsx: h } = host;
+    const { jsx: h, ui } = host;
     const useUsage = makeUseUsage(host);
 
     return function TaskManagerChip(props) {
       const { report } = useUsage(CHIP_POLL_MS);
-      const mobile = props && props.presentation === "mobile";
+      const mobile = props && props.slotProps && props.slotProps.presentation === "mobile";
       const tasks = (report && report.tasks) || [];
       const cores = (report && report.cpu_cores) || 1;
       const totalCPU = tasks.reduce((sum, t) => sum + t.cpu_percent, 0);
+      const translate = host.i18n && typeof host.i18n.useTranslation === "function"
+        ? host.i18n.useTranslation().t
+        : null;
+      const label = translate
+        ? translate("cpuActionLabel", { defaultValue: "Task Manager CPU usage" })
+        : "Task Manager CPU usage";
+      const percent = formatCPU(totalCPU);
+      const tooltip = translate
+        ? translate("cpuActionTooltip", {
+            defaultValue: "Open Task Manager · CPU {{percent}} · Shortcut: {{hotkey}}",
+            values: { percent, hotkey: HOTKEY_HINT },
+          })
+        : `Open Task Manager · CPU ${percent} · Shortcut: ${HOTKEY_HINT}`;
+
+      if (typeof ui.Action === "function") {
+        return h(ui.Action, {
+          label,
+          icon: cpuIcon(h),
+          text: percent,
+          tooltip,
+          onClick: () => openManager(),
+        });
+      }
 
       return h(
         "button",
@@ -1058,8 +1101,8 @@
           className: "ktm-chip",
           style: mobile ? { minHeight: "2.75rem", padding: "0 0.75rem" } : null,
           onClick: () => openManager(),
-          "aria-label": `Open ${TITLE}`,
-          title: `${TITLE}  ·  ${HOTKEY_HINT}`,
+          "aria-label": label,
+          title: tooltip,
         },
         h("span", { className: "ktm-chip-label" }, "CPU"),
         h(
@@ -1078,6 +1121,15 @@
   window.registerKandevPlugin(PLUGIN_ID, {
     initialize(registry, host) {
       injectStyles();
+
+      if (typeof registry.registerTranslations === "function") {
+        registry.registerTranslations({
+          en: {
+            cpuActionLabel: "Task Manager CPU usage",
+            cpuActionTooltip: "Open Task Manager · CPU {{percent}} · Shortcut: {{hotkey}}",
+          },
+        });
+      }
 
       // One modal at a time. The handle host.openModal returns carries no
       // close notification, so a modal dismissed with Esc leaves a stale
