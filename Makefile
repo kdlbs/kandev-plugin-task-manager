@@ -1,7 +1,7 @@
 .PHONY: build test live fmt vet package package-host clean
 
 BIN := bin/kandev-plugin-task-manager
-VERSION := 0.1.1
+VERSION := 0.1.2
 STAGE := .build/stage
 PKG_OUT := kandev-plugin-task-manager-$(VERSION).tar.gz
 
