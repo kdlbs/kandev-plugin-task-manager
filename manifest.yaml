@@ -1,6 +1,6 @@
 id: "kandev-plugin-task-manager"
 api_version: 1
-version: "0.1.1"
+version: "0.1.3"
 display_name: "Task Manager"
 description: "Per-task CPU and memory for running agents — a hotkey task manager over the real host process tree."
 author: "kandev"

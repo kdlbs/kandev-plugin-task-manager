@@ -1,7 +1,7 @@
 .PHONY: build test test-backend test-ui test-package-verifier test-release-version test-harness smoke-package live fmt check-format vet package package-host verify-package verify-package-host package-file clean
 
 BIN := bin/kandev-plugin-task-manager
-VERSION := 0.1.1
+VERSION := 0.1.3
 STAGE := .build/stage
 PKG_OUT := kandev-plugin-task-manager-$(VERSION).tar.gz
 KANDEV_SDK := ../kandev/apps/backend
