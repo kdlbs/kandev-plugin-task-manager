@@ -54,3 +54,7 @@ jobs:
       - name: Test
         working-directory: plugin
         run: make test
+
+      - name: Package current platform
+        working-directory: plugin
+        run: make package-host
