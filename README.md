@@ -87,11 +87,18 @@ The hotkey is remappable in **Settings → Plugins → Task Manager**. A CPU chi
 also appears in the top bar on the Kanban and Tasks views, and opens the same
 panel.
 
+The plugin requests `api_read: tasks` to show task titles. Its usage webhook
+requires an authenticated host session. The manifest keeps plugin API v1 and
+does not set `min_kandev_version`. A host with `host.ui.Action` shows a CPU
+icon and percentage. An older compatible host keeps the current chip and its
+meter.
+
 ![The panel open over the Kanban board, with the CPU chip in the top bar](docs/media/in-app.png)
 
 ## Cost
 
-Sampling is request-driven: with the panel closed, the plugin does nothing.
+The top-bar chip polls every 4 seconds while its component is mounted. The
+panel polls every 1.2 seconds while it is open.
 
 A warm poll costs about **30 ms** on a machine running 24 tasks across 748
 processes — essentially the cost of one `/proc` scan. Reading PSS for every
@@ -103,26 +110,68 @@ hour ago as busy now.
 
 ## Development
 
-```sh
-make test          # unit tests
-make live          # sample this machine and print the per-task rollup
-make package-host  # build a package for the host platform only
-make package       # build all five platforms
-```
+Use Go 1.26 and Node.js 24. The UI is plain JavaScript. Node's built-in test
+runner checks its host Action and legacy paths.
 
-The Go SDK is not published as a standalone module yet, so `go.mod` resolves it
-from a sibling checkout of the Kandev monorepo at `../kandev/apps/backend`.
-
-`.harness/` renders `ui/bundle.js` against a stub host that reproduces Kandev's
-real `DialogContent` — including that it is a CSS grid, which is what makes
-layout bugs appear in the app but not in a naive mock:
+Clone the Kandev SDK beside this repository at the pinned source revision:
 
 ```sh
-python3 -m http.server 8977 &
-node .harness/shoot.mjs      # layout, overflow, ordering and styling checks
-node .harness/real-app.mjs   # the same checks against a running Kandev
+git clone https://github.com/kdlbs/kandev.git ../kandev
+git -C ../kandev checkout "$(cat .kandev-sdk-ref)"
 ```
 
-## Licence
+The Go SDK is not a separate module. `go.mod` reads it from
+`../kandev/apps/backend`. The source pin is not a minimum host version.
+
+Run the main checks and builds from this directory:
+
+```sh
+make check-format
+make vet
+make test
+make build
+make verify-package-host
+make verify-package
+```
+
+`make test` runs Go tests, UI contract tests, and negative package and release
+checks. `make verify-package-host` builds and checks one platform. The full
+package command cross-compiles every platform in `manifest.yaml`, then checks
+the file list and SHA-256 checksums.
+
+The release workflow runs from `main`. It selects a version bump, checks the
+candidate, and builds the full package before it commits a version or tag. A
+pushed `v*` tag must match `manifest.yaml`, the Makefile, and the package.
+
+The browser harness uses fake task and process data. Install its locked test
+dependencies, then run its layout and ordering checks:
+
+```sh
+npm ci --prefix .harness
+npx --prefix .harness playwright install chromium
+make test-harness
+```
+
+For host review, build the package and upload it to an isolated local Kandev
+host. Route the usage request to synthetic data, then run the desktop and mobile
+checks. `HOST_ACTION=1` checks the Action path. `HOST_ACTION=0` checks the legacy
+path. The host source revision must match the selected mode.
+
+```sh
+make package
+KANDEV_URL=http://127.0.0.1:18080 PACKAGE_FILE=kandev-plugin-task-manager-0.1.1.tar.gz HOST_ACTION=1 make smoke-package
+```
+
+The browser check covers keyboard activation, mobile touch size and fit, and
+disable/re-enable behavior. The standalone browser harness does not certify a
+host release. This repository does not set a minimum host version.
+
+The live process diagnostic is optional. It samples the machine where it runs:
+
+```sh
+make live
+```
+
+## License
 
 MIT — see [LICENSE](LICENSE).
