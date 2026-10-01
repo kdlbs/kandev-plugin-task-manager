@@ -5,8 +5,49 @@
 (function () {
   const CORES = 16;
 
+  // Keep timer callbacks controllable for the cadence assertion in shoot.mjs.
+  // The production bundle still uses the browser timers; this only lets the
+  // harness fire a long (300s) retry without waiting five minutes.
+  const nativeSetTimeout = window.setTimeout.bind(window);
+  const nativeClearTimeout = window.clearTimeout.bind(window);
+  const scheduledTimers = new Set();
+  window.setTimeout = (callback, delay, ...args) => {
+    const record = {
+      callback,
+      delay: Number(delay) || 0,
+      args,
+      id: null,
+    };
+    const wrapped = () => {
+      scheduledTimers.delete(record);
+      callback(...args);
+    };
+    record.id = nativeSetTimeout(wrapped, delay);
+    scheduledTimers.add(record);
+    return record.id;
+  };
+  window.clearTimeout = (id) => {
+    for (const record of scheduledTimers) {
+      if (record.id !== id) continue;
+      scheduledTimers.delete(record);
+      break;
+    }
+    return nativeClearTimeout(id);
+  };
+  window.__pendingTimerDelays = () =>
+    [...scheduledTimers].filter((record) => record.id !== null).map((record) => record.delay);
+  window.__runScheduledTimer = (minimumDelay = 0) => {
+    const record = [...scheduledTimers]
+      .reverse()
+      .find((candidate) => candidate.delay >= minimumDelay);
+    if (!record) throw new Error(`no pending timer at least ${minimumDelay}ms`);
+    scheduledTimers.delete(record);
+    nativeClearTimeout(record.id);
+    return record.callback(...record.args);
+  };
+
   const LONG_CMD =
-    "/home/jcfs/.npm/_npx/d820eb7d96bc2600/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude " +
+    "/workspace/.npm/_npx/agent-sdk/claude " +
     "--output-format stream-json --verbose --input-format stream-json --permission-mode acceptEdits " +
     "--mcp-config /tmp/kandev-mcp-config-8837.json --append-system-prompt-file /tmp/kandev-sysprompt.md";
 
@@ -25,9 +66,9 @@
       memory_bytes: 2942 * 1024 * 1024,
       memory_basis: "pss",
       processes: [
-        proc(490031, "MainThread", 313.9, 2568, "node /home/jcfs/.kandev/tasks/use-shared-formatbyt_nx34w0d6/kandev/apps/web/node_modules/.bin/../vitest/vitest.mjs run --reporter=verbose"),
+        proc(490031, "MainThread", 313.9, 2568, "node /workspace/kandev/apps/web/node_modules/vitest/vitest.mjs run --reporter=verbose"),
         proc(101465, "claude", 9.0, 250, LONG_CMD),
-        proc(489920, "MainThread", 0.4, 59, "node /home/jcfs/.nvm/versions/node/v24.18.0/bin/pnpm test"),
+        proc(489920, "MainThread", 0.4, 59, "node /workspace/node/bin/pnpm test"),
         proc(100910, "npm exec @agentclientprotocol", 0, 12, "npm exec @agentclientprotocol/claude-agent-acp"),
         proc(551348, "sleep", 0, 0, "sleep 45"),
       ],
@@ -42,7 +83,7 @@
       memory_bytes: 870 * 1024 * 1024,
       memory_basis: "pss",
       processes: [
-        proc(594626, "MainThread", 54.7, 620, "node /home/jcfs/.kandev/tasks/what-about-the-conce_i94zd072/kandev/apps/web/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"),
+        proc(594626, "MainThread", 54.7, 620, "node /workspace/kandev/apps/web/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"),
         proc(56964, "claude", 5.0, 235, LONG_CMD),
         proc(56794, "MainThread", 0, 15, "node claude-agent-acp"),
       ],
@@ -60,7 +101,7 @@
         proc(59617, "claude", 6.8, 235, LONG_CMD),
         proc(552466, "gh", 0, 35, "gh api repos/kdlbs/kandev/compare/08f07b709e7cbd653319d242bf4bbca73cc645b0...5f5bd7cfb05d40a15f9c77c25b25d3a8d2e82fdd"),
         proc(552465, "jq", 0, 4, "jq -c {merge_base_oid: (.merge_base_commit.sha // null)}"),
-        proc(552463, "bash", 0, 2, "bash /home/jcfs/.kandev/tasks/kandev-log-is-loggin_nvtcung7/kandev/scripts/pr-state --summary 2865"),
+        proc(552463, "bash", 0, 2, "bash /workspace/kandev/scripts/pr-state --summary 2865"),
       ],
     },
     {
@@ -120,10 +161,70 @@
     tasks: TASKS,
   };
 
+  const h = window.React.createElement;
+  let translationCatalog = {};
+  const storageListeners = new Set();
+  const saveContributors = new Map();
+  let monitorStorage = null;
+  let monitorStorageUpdatedAt = null;
+
+  function clone(value) {
+    return value === undefined ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  function translate(key, options) {
+    let message = translationCatalog.en?.[key] || key;
+    for (const [name, value] of Object.entries(options?.values || {})) {
+      message = message.replaceAll(`{{${name}}}`, String(value));
+    }
+    return message;
+  }
+
+  function plainComponent(tag) {
+    return function Component(props) {
+      const { children, asChild, ...rest } = props || {};
+      return h(tag, rest, children);
+    };
+  }
+
+  function buttonComponent(props) {
+    const { children, variant, size, ...rest } = props || {};
+    return h("button", rest, children);
+  }
+
+  function checkComponent(props) {
+    const { checked, onCheckedChange, children, ...rest } = props || {};
+    return h("input", {
+      ...rest,
+      type: "checkbox",
+      checked: Boolean(checked),
+      onChange: (event) => onCheckedChange?.(event.target.checked),
+    }, children);
+  }
+
+  const UI = {
+    SettingsCard: plainComponent("section"),
+    Card: plainComponent("section"),
+    CardHeader: plainComponent("div"),
+    CardTitle: plainComponent("h2"),
+    CardContent: plainComponent("div"),
+    Button: buttonComponent,
+    Switch: checkComponent,
+    Checkbox: checkComponent,
+    Tooltip: plainComponent("span"),
+    TooltipProvider: plainComponent("span"),
+    TooltipTrigger: plainComponent("span"),
+    TooltipContent: plainComponent("span"),
+  };
+
   // Each poll swaps the CPU of the top two tasks, which is the churn that
   // made the real list reshuffle every second. The harness exaggerates it so
   // an ordering regression is unmissable rather than intermittent.
   let poll = 0;
+  let summaryFetches = 0;
+  let lastSummaryRequest = null;
+  let summaryIntervalSeconds = 300;
+  let summaryShouldFail = false;
   function reportForPoll() {
     poll += 1;
     const swing = poll % 2 === 0;
@@ -144,6 +245,14 @@
     return { ...REPORT, tasks, sampled_at: new Date().toISOString() };
   }
   window.__pollCount = () => poll;
+  window.__summaryFetchCount = () => summaryFetches;
+  window.__lastSummaryRequest = () => clone(lastSummaryRequest);
+  window.__setSummaryInterval = (seconds) => {
+    summaryIntervalSeconds = seconds;
+  };
+  window.__setSummaryFailure = (shouldFail) => {
+    summaryShouldFail = Boolean(shouldFail);
+  };
   // Lets the ordering test restart the climbing task from idle, so its rank
   // is measured from a known starting point rather than wherever the earlier
   // steps happened to leave it.
@@ -156,7 +265,66 @@
     jsx: window.React.createElement,
     theme: "dark",
     api: {
-      fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve(reportForPoll()) }),
+      fetch: (path, options = {}) => {
+        if (path === "webhooks/summary") {
+          summaryFetches += 1;
+          if (summaryShouldFail) {
+            return Promise.resolve({
+              ok: false,
+              status: 503,
+              json: () => Promise.resolve({ error: "summary unavailable" }),
+            });
+          }
+          let request = {};
+          try {
+            request = JSON.parse(options.body || "{}");
+            lastSummaryRequest = request;
+          } catch (_error) {
+            return Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({ error: "bad request" }) });
+          }
+          const source = request.cpu_source || "tasks";
+          const metrics = {};
+          for (const id of request.metric_ids || []) {
+            if (id === "cpu") {
+              metrics.cpu = {
+                available: true,
+                source,
+                core_percent: source === "host" ? 240 : 42,
+                relative_percent: source === "host" ? 15 : 2.625,
+              };
+            } else if (id === "memory") {
+              metrics.memory = {
+                available: true,
+                used_bytes: 8 * 1024 * 1024 * 1024,
+                total_bytes: 32 * 1024 * 1024 * 1024,
+                percent: 25,
+              };
+            } else if (id === "disk") {
+              metrics.disk = {
+                available: true,
+                path: "/",
+                used_bytes: 82 * 1024 * 1024 * 1024,
+                total_bytes: 100 * 1024 * 1024 * 1024,
+                percent: 82,
+              };
+            } else if (id === "cpu_temperature") {
+              metrics.cpu_temperature = { available: true, celsius: 57.5 };
+            } else if (id === "system_load") {
+              metrics.system_load = { available: true, one_minute: 1.25 };
+            }
+          }
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              sampled_at: new Date().toISOString(),
+              refresh_interval_seconds: summaryIntervalSeconds,
+              cpu_cores: CORES,
+              metrics,
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(reportForPoll()) });
+      },
       baseUrl: "",
     },
     navigate: (href) => console.log("navigate", href),
@@ -165,7 +333,56 @@
       window.__modalTitle = options.title;
       return { close: () => {} };
     },
-    ui: {},
+    ui: UI,
+    i18n: {
+      locale: "en",
+      t: translate,
+      useTranslation: () => ({ locale: "en", t: translate }),
+    },
+    storage: {
+      get: async () => monitorStorageUpdatedAt
+        ? { value: clone(monitorStorage), updatedAt: monitorStorageUpdatedAt }
+        : null,
+      set: async (_scope, _scopeId, _key, value, options = {}) => {
+        if (options.ifUnmodifiedSince && options.ifUnmodifiedSince !== monitorStorageUpdatedAt) {
+          const error = new Error("storage conflict");
+          error.name = "PluginStorageConflictError";
+          throw error;
+        }
+        monitorStorage = clone(value);
+        monitorStorageUpdatedAt = new Date().toISOString();
+        // The real host suppresses the writer's own subscription echo. The
+        // controller publishes its local save directly; external updates use
+        // __notifyMonitorStorage below.
+        return { value: clone(monitorStorage), updatedAt: monitorStorageUpdatedAt };
+      },
+      subscribe: (_filter, handler) => {
+        storageListeners.add(handler);
+        return () => storageListeners.delete(handler);
+      },
+    },
+    useSettingsSaveContributor: (contributor) => {
+      saveContributors.set(contributor.id, contributor);
+      window.__settingsContributor = contributor;
+    },
+  };
+
+  window.__setMonitorStorage = (value) => {
+    monitorStorage = clone(value);
+    monitorStorageUpdatedAt = new Date().toISOString();
+  };
+  window.__notifyMonitorStorage = (value) => {
+    monitorStorage = clone(value);
+    monitorStorageUpdatedAt = new Date().toISOString();
+    for (const listener of storageListeners) listener();
+  };
+  window.__saveMonitorSettings = () => {
+    const contributor = window.__settingsContributor;
+    return contributor ? contributor.save(contributor.revision) : Promise.reject(new Error("no settings contributor"));
+  };
+  window.__discardMonitorSettings = () => {
+    const contributor = window.__settingsContributor;
+    return contributor?.discard(contributor.revision);
   };
 
   const slots = {};
@@ -173,6 +390,9 @@
   const registry = {
     registerComponent: (slot, C) => {
       slots[slot] = C;
+    },
+    registerTranslations: (catalog) => {
+      translationCatalog = catalog;
     },
     registerKeybinding: (id, handler) => {
       keys[id] = handler;
@@ -191,6 +411,11 @@
     if (slots["main-top-bar"]) {
       window.__createRoot(document.getElementById("chip-slot")).render(
         h(slots["main-top-bar"], { presentation: "desktop", currentPage: "kanban" }),
+      );
+    }
+    if (slots["plugin-settings"]) {
+      window.__createRoot(document.getElementById("settings-body")).render(
+        h(slots["plugin-settings"], { pluginId: id, status: "active" }),
       );
     }
     document.getElementById("modal-title").textContent = window.__modalTitle;

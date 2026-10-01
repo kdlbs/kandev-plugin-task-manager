@@ -1,7 +1,13 @@
-import { chromium } from "/home/jcfs/playground/kandev/apps/web/node_modules/@playwright/test/index.mjs";
+import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+import { loadPlaywright } from "./modules.mjs";
+
+const { chromium } = await loadPlaywright();
 
 const BASE = process.env.HARNESS_URL || "http://127.0.0.1:8977/.harness/index.html";
-const OUT = process.env.HARNESS_OUT || "/home/jcfs/kandev-plugins/kandev-plugin-task-manager/.harness";
+const OUT = process.env.HARNESS_OUT || fileURLToPath(new URL(".", import.meta.url));
+await mkdir(OUT, { recursive: true });
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
@@ -12,7 +18,9 @@ page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
 
 await page.goto(BASE, { waitUntil: "networkidle" });
 await page.waitForSelector(".ktm-frame", { timeout: 10000 });
-await page.waitForTimeout(500);
+await page.waitForSelector("[data-testid=ktm-host-monitor]", { timeout: 10000 });
+await page.waitForSelector("[data-testid=ktm-monitor-settings]", { timeout: 10000 });
+await page.waitForTimeout(300);
 
 // The overflow check that matters: does any element stick out past the
 // dialog, and does the table scroll horizontally?
@@ -83,14 +91,160 @@ const grouping = await page.evaluate(() => ({
 }));
 console.log("grouping:", JSON.stringify(grouping));
 
-// The chip is a <button>, which does not inherit colour; a missing rule
+// The monitor is a <button>, which does not inherit colour; a missing rule
 // leaves its value in the UA's dark grey, invisible on a dark background.
 const chip = await page.evaluate(() => {
-  const value = document.querySelector(".ktm-chip-value");
+  const value = document.querySelector(".ktm-monitor-value");
   if (!value) return null;
-  return { color: getComputedStyle(value).color, text: value.innerText };
+  const monitor = document.querySelector("[data-testid=ktm-host-monitor]");
+  return {
+    color: getComputedStyle(value).color,
+    text: value.innerText,
+    accessibleLabel: monitor?.getAttribute("aria-label") || null,
+  };
 });
-console.log("chip value:", JSON.stringify(chip));
+console.log("host monitor value:", JSON.stringify(chip));
+if (
+  !chip ||
+  !chip.text ||
+  chip.color === "rgb(128, 128, 128)" ||
+  !chip.accessibleLabel?.includes("CPU") ||
+  !chip.accessibleLabel.includes(chip.text)
+) {
+  console.error("FAIL: host monitor did not render a readable value");
+  process.exitCode = 1;
+}
+
+// A successful 300-second response must control the retry after a transient
+// error. This fires the pending production timer directly so the test stays
+// fast while still exercising the actual useSummary closure.
+await page.evaluate(() => window.__setSummaryFailure(true));
+await page.evaluate(async () => {
+  await window.__runScheduledTimer(300000);
+});
+await page.waitForTimeout(100);
+const retryCadence = await page.evaluate(() => ({
+  pending: window.__pendingTimerDelays(),
+  accessibleLabel: document.querySelector("[data-testid=ktm-host-monitor]")?.getAttribute("aria-label") || null,
+}));
+console.log("summary retry cadence and accessible state:", JSON.stringify(retryCadence));
+if (!retryCadence.pending.includes(300000) || retryCadence.pending.includes(5000) || !retryCadence.accessibleLabel?.includes("stale")) {
+  console.error("FAIL: summary retry cadence or stale accessible status regressed");
+  process.exitCode = 1;
+}
+await page.evaluate(() => {
+  window.__setSummaryFailure(false);
+  window.__setSummaryInterval(1);
+});
+
+const settingsShape = await page.evaluate(() => ({
+  rows: document.querySelectorAll("[data-testid^=ktm-monitor-settings] [data-metric-id]").length,
+  diskHelpLabel: document.querySelector(".ktm-help-button")?.getAttribute("aria-label") || null,
+  diskHelpRelation: document.querySelector(".ktm-help-button")?.getAttribute("aria-describedby") || null,
+  diskHelpText: document.getElementById("ktm-disk-monitor-help")?.textContent || null,
+  initialRequest: window.__lastSummaryRequest(),
+}));
+console.log("settings shape:", JSON.stringify(settingsShape));
+if (
+  settingsShape.rows !== 5 ||
+  !settingsShape.diskHelpLabel ||
+  !settingsShape.diskHelpRelation ||
+  !settingsShape.diskHelpText ||
+  JSON.stringify(settingsShape.initialRequest) !== JSON.stringify({ metric_ids: ["cpu"], cpu_source: "tasks" })
+) {
+  console.error("FAIL: monitor settings or disk help is incomplete");
+  process.exitCode = 1;
+}
+
+// Keyboard ordering must preserve the moved metric's focus target. Discard
+// restores the confirmed order before the next setting is changed.
+await page.locator("[data-testid=ktm-monitor-settings] [data-metric-id=cpu] .ktm-drag-handle").focus();
+await page.keyboard.press("ArrowDown");
+await page.waitForTimeout(100);
+const movedOrder = await page.locator("[data-testid=ktm-monitor-settings] [data-metric-id]").evaluateAll(
+  (rows) => rows.map((row) => row.dataset.metricId),
+);
+console.log("keyboard order:", JSON.stringify(movedOrder));
+if (movedOrder[1] !== "cpu") {
+  console.error("FAIL: keyboard metric ordering did not move CPU");
+  process.exitCode = 1;
+}
+await page.evaluate(() => window.__discardMonitorSettings());
+await page.waitForTimeout(100);
+
+await page.locator("#ktm-enabled-memory").check();
+await page.evaluate(() => window.__saveMonitorSettings());
+await page.waitForSelector("[data-testid=ktm-monitor-memory]", { timeout: 5000 });
+console.log("saved memory metric:", await page.locator("[data-testid=ktm-monitor-memory]").innerText());
+
+// A threshold controls presentation only. The disk selector must remain in
+// the request so a later threshold crossing can appear without changing the
+// administrator's sampling policy.
+await page.locator("#ktm-enabled-disk").check();
+await page.locator("#ktm-disk-visibility").selectOption("threshold");
+await page.locator("#ktm-disk-threshold").fill("83");
+await page.evaluate(() => window.__saveMonitorSettings());
+await page.waitForFunction(() => window.__lastSummaryRequest()?.metric_ids?.includes("disk"), null, { timeout: 5000 });
+await page.waitForFunction(() => !document.querySelector("[data-testid=ktm-monitor-disk]"), null, { timeout: 5000 });
+const hiddenDisk = await page.evaluate(() => ({
+  visible: Boolean(document.querySelector("[data-testid=ktm-monitor-disk]")),
+  requested: window.__lastSummaryRequest()?.metric_ids || [],
+}));
+console.log("disk threshold below value:", JSON.stringify(hiddenDisk));
+if (hiddenDisk.visible || !hiddenDisk.requested.includes("disk")) {
+  console.error("FAIL: disk threshold hid sampling or rendered below threshold");
+  process.exitCode = 1;
+}
+await page.locator("#ktm-disk-threshold").fill("82");
+await page.evaluate(() => window.__saveMonitorSettings());
+await page.waitForSelector("[data-testid=ktm-monitor-disk]", { timeout: 5000 });
+console.log("disk threshold at value:", await page.locator("[data-testid=ktm-monitor-disk]").innerText());
+const fetchesBeforeDisable = await page.evaluate(() => window.__summaryFetchCount());
+
+await page.locator(".ktm-help-button").focus();
+const focusedHelp = await page.evaluate(() => ({
+  focused: document.activeElement?.classList.contains("ktm-help-button"),
+  text: document.getElementById("ktm-disk-monitor-help")?.textContent || "",
+}));
+console.log("keyboard disk help:", JSON.stringify(focusedHelp));
+if (!focusedHelp.focused || !focusedHelp.text.includes("does not scan files or directories")) {
+  console.error("FAIL: disk help is not keyboard accessible");
+  process.exitCode = 1;
+}
+
+// Disable every metric and save. The top bar disappears and no new summary
+// request is scheduled; re-enable CPU to leave the harness in a usable state.
+for (const checkbox of await page.locator("[id^=ktm-enabled-]").all()) {
+  if (await checkbox.isChecked()) await checkbox.uncheck();
+}
+await page.evaluate(() => window.__saveMonitorSettings());
+await page.waitForTimeout(1300);
+const disabledState = await page.evaluate((before) => ({
+  monitor: Boolean(document.querySelector("[data-testid=ktm-host-monitor]")),
+  fetches: window.__summaryFetchCount(),
+  before,
+}), fetchesBeforeDisable);
+console.log("all-disabled state:", JSON.stringify(disabledState));
+if (disabledState.monitor || disabledState.fetches !== disabledState.before) {
+  console.error("FAIL: all-disabled monitor still rendered or polled");
+  process.exitCode = 1;
+}
+await page.locator("#ktm-enabled-cpu").check();
+await page.evaluate(() => window.__saveMonitorSettings());
+await page.waitForSelector("[data-testid=ktm-host-monitor]", { timeout: 5000 });
+
+await page.setViewportSize({ width: 390, height: 844 });
+const mobileMonitor = await page.locator("[data-testid=ktm-host-monitor]").evaluate((element) => ({
+  height: Math.round(element.getBoundingClientRect().height),
+  bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+  richStatus: element.getAttribute("data-main-top-bar-rich"),
+}));
+console.log("mobile monitor:", JSON.stringify(mobileMonitor));
+if (mobileMonitor.height < 44 || mobileMonitor.bodyOverflow > 1 || mobileMonitor.richStatus !== "true") {
+  console.error("FAIL: mobile monitor is not touch-sized or overflows");
+  process.exitCode = 1;
+}
+await page.setViewportSize({ width: 1400, height: 1000 });
 
 await page.screenshot({ path: `${OUT}/01-collapsed-dark.png` });
 

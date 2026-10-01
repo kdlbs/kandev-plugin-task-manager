@@ -3,10 +3,16 @@
 // The stub harness models the host's DialogContent; this proves it. Every
 // overflow bug in this plugin so far survived the stub and only showed up in
 // the real app, so this is the check that actually counts.
-import { chromium } from "/home/jcfs/playground/kandev/apps/web/node_modules/@playwright/test/index.mjs";
+import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+import { loadPlaywright } from "./modules.mjs";
+
+const { chromium } = await loadPlaywright();
 
 const BASE = process.env.KANDEV_URL || "http://127.0.0.1:38773";
-const OUT = process.env.OUT || "/home/jcfs/kandev-plugins/kandev-plugin-task-manager/.harness";
+const OUT = process.env.OUT || fileURLToPath(new URL(".", import.meta.url));
+await mkdir(OUT, { recursive: true });
 
 const browser = await chromium.launch();
 const results = [];
@@ -15,6 +21,7 @@ for (const viewport of [
   { width: 1440, height: 900, name: "wide" },
   { width: 1024, height: 768, name: "medium" },
   { width: 820, height: 700, name: "narrow" },
+  { width: 390, height: 844, name: "mobile" },
 ]) {
   const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height } });
   const errors = [];
@@ -26,6 +33,7 @@ for (const viewport of [
 
   await page.keyboard.press("Control+Shift+Escape");
   await page.waitForSelector(".ktm-frame", { timeout: 15000 });
+  await page.waitForSelector("[data-testid=ktm-host-monitor]", { timeout: 15000 });
   // Let a couple of poll cycles land so CPU numbers are real, not zeros.
   await page.waitForTimeout(4000);
 
@@ -62,6 +70,8 @@ for (const viewport of [
       processRows: document.querySelectorAll(".ktm-proc").length,
       idleRow: document.querySelector(".ktm-idle-head")?.innerText.replace(/\s+/g, " ") ?? null,
       styleTag: Boolean(document.getElementById("ktm-styles")),
+      ambientMonitor: Boolean(document.querySelector("[data-testid=ktm-host-monitor]")),
+      ambientMonitorHeight: Math.round(document.querySelector("[data-testid=ktm-host-monitor]")?.getBoundingClientRect().height || 0),
     };
   });
 
@@ -76,8 +86,10 @@ for (const viewport of [
 const bad = results.filter(
   (r) => r.frameOverflowsDialog > 1 || r.documentHorizontalScroll > 1 || r.strays.length > 0,
 );
-if (bad.length) {
+const missingMonitor = results.filter((result) => !result.ambientMonitor || result.ambientMonitorHeight < 24);
+if (bad.length || missingMonitor.length) {
   console.error("FAIL: overflow in the real app at:", bad.map((b) => b.viewport).join(", "));
+  if (missingMonitor.length) console.error("FAIL: ambient monitor missing or too small at:", missingMonitor.map((b) => b.viewport).join(", "));
   process.exitCode = 1;
 } else {
   console.log("PASS: no overflow in the real app at any viewport");
