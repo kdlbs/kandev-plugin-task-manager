@@ -195,3 +195,12 @@ test("keeps rich progress segments even when host Action exists", async () => {
   assert.equal(monitor.props["data-main-top-bar-rich"], "true");
   assert.deepEqual(monitor.props.style, { minHeight: "2.75rem" });
 });
+
+test("marks one-core task CPU hot while the bar keeps whole-host capacity", async () => {
+  const report = { cpu_cores: 8, metrics: { cpu: { available: true, source: "tasks", core_percent: 200, relative_percent: 25 } } };
+  const loaded = await loadPlugin({ showBar: true, report });
+  const monitor = loaded.components[0].component({ slotProps: { presentation: "desktop" } });
+  const fill = monitor.children[0][0].children[1].children[0];
+  assert.equal(fill.props.className, "ktm-fill ktm-fill-hot");
+  assert.equal(fill.props.style.width, "25%");
+});

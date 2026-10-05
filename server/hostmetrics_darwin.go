@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -80,7 +81,11 @@ func readDarwinVMCounts() (free, inactive, speculative, pageSize uint64, err err
 	if freeErr == nil && inactiveErr == nil && speculativeErr == nil {
 		return free, inactive, speculative, pageSize, nil
 	}
-	data, commandErr := exec.Command("vm_stat").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "vm_stat")
+	command.WaitDelay = 100 * time.Millisecond
+	data, commandErr := command.Output()
 	if commandErr != nil {
 		return 0, 0, 0, 0, fmt.Errorf("read vm_stat: %w", commandErr)
 	}

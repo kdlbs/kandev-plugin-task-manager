@@ -64,6 +64,11 @@ Disk monitoring reads filesystem capacity metadata for the configured path. It
 does not scan files or directories. A disk visibility threshold hides the
 reading from the top bar below the threshold, but it does not stop sampling.
 
+A disk call that exceeds its deadline makes the reading unavailable.
+Only one operating-system disk call can remain in flight.
+If that call stays blocked, later disk requests fail within a bounded interval
+until it returns or the plugin restarts. Other monitor readings remain available.
+
 ## How attribution works
 
 Kandev exports `KANDEV_TASK_ID` and `KANDEV_SESSION_ID` into every agent's

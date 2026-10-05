@@ -60,6 +60,7 @@ const page = await desktop.newPage();
 const mobilePage = await mobile.newPage();
 let installed = false;
 const usageRequests = { desktop: 0, mobile: 0 };
+const summaryRequests = { desktop: 0, mobile: 0 };
 for (const [name, target] of [["desktop", page], ["mobile", mobilePage]]) {
   target.on("crash", () => console.error(`${name} browser page crashed.`));
   target.on("pageerror", (error) => console.error(`${name} page error: ${error.message}`));
@@ -70,7 +71,7 @@ for (const [name, target] of [["desktop", page], ["mobile", mobilePage]]) {
 
 async function useSyntheticUsage(target, device) {
   await target.route(`**/api/plugins/${PLUGIN_ID}/webhooks/summary`, async (route) => {
-    usageRequests[device] += 1;
+    summaryRequests[device] += 1;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
       sampled_at: new Date().toISOString(), refresh_interval_seconds: 1, cpu_cores: 4,
       metrics: { cpu: { available: true, source: "tasks", core_percent: 37.5, relative_percent: 9.375 } },
@@ -204,8 +205,9 @@ try {
   await expect(desktopAction).toHaveCount(0);
   await expect(page.locator(".ktm-monitor")).toHaveCount(0);
   const requestsWhenDisabled = usageRequests.desktop;
+  const summariesWhenDisabled = summaryRequests.desktop;
   await page.waitForTimeout(CHIP_POLL_INTERVAL_MS + 250);
-  if (usageRequests.desktop !== requestsWhenDisabled) {
+  if (usageRequests.desktop !== requestsWhenDisabled || summaryRequests.desktop !== summariesWhenDisabled) {
     throw new Error("The disabled desktop Action kept polling synthetic usage data.");
   }
 
@@ -215,7 +217,7 @@ try {
   await page.goto(new URL("/tasks", base).href);
   await expect(actionButton(page)).toBeVisible({ timeout: 15_000 });
   await assertControlPath(page);
-  await expect.poll(() => usageRequests.desktop, { timeout: 10_000 }).toBeGreaterThan(requestsWhenDisabled);
+  await expect.poll(() => summaryRequests.desktop, { timeout: 10_000 }).toBeGreaterThan(summariesWhenDisabled);
   console.log(
     `PASS: packaged plugin ${PLUGIN_ID}, rich monitor, desktop ${desktopBox?.width}x${desktopBox?.height}px, Pixel 5 target ${mobileBox.width}x${mobileBox.height}px (coarse pointer), keyboard/keybinding, polling lifecycle, disable/re-enable, synthetic usage and summary reports.`,
   );

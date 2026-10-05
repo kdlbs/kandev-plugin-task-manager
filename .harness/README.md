@@ -8,6 +8,7 @@ From the plugin repository:
 
 ```sh
 npm ci --prefix .harness
+npx --prefix .harness playwright install chromium
 make test-harness
 ```
 

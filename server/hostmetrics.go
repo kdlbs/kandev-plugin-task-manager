@@ -7,6 +7,7 @@ import (
 	"math"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -61,6 +62,7 @@ type hostMetricsReader interface {
 }
 
 type hostMetricsCollector struct {
+	cpuMu  sync.Mutex
 	reader hostMetricsReader
 	prev   hostCPUTimes
 	prevAt time.Time
@@ -212,6 +214,8 @@ func calculateHostCPUPercent(previous, current hostCPUTimes) (float64, error) {
 }
 
 func (c *hostMetricsCollector) sampleHostCPU(ctx context.Context) (float64, float64, error) {
+	c.cpuMu.Lock()
+	defer c.cpuMu.Unlock()
 	current, err := c.reader.readCPUTimes()
 	if err != nil {
 		return 0, 0, err

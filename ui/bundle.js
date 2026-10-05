@@ -1509,7 +1509,7 @@
             "span",
             { className: "ktm-monitor-track", "aria-hidden": "true" },
             h("span", {
-              className: `ktm-fill${progress >= ONE_CORE ? " ktm-fill-hot" : ""}`,
+              className: `ktm-fill${(metric.id === "cpu" ? sample.core_percent : progress) >= ONE_CORE ? " ktm-fill-hot" : ""}`,
               style: { width: monitorProgressWidth(progress) },
             }),
           )

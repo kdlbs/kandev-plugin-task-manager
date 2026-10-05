@@ -22,7 +22,7 @@ import (
 type taskManagerPlugin struct {
 	pluginsdk.UnimplementedPlugin
 
-	// cpuMu serializes the two stateful CPU samplers. Two overlapping polls
+	// cpuMu serializes task CPU baselines. Two overlapping polls
 	// sharing one previous observation would each diff against it and both
 	// report roughly half the real rate, so the second caller waits and then
 	// gets an honest reading. Host memory, disk, temperature, and load are
@@ -278,8 +278,6 @@ func (p *taskManagerPlugin) sampleSummaryCPU(ctx context.Context, source string,
 }
 
 func (p *taskManagerPlugin) sampleSummaryCPUWithCollector(ctx context.Context, source string, cores int, metrics *hostMetricsCollector) summaryMetric {
-	p.cpuMu.Lock()
-	defer p.cpuMu.Unlock()
 	if source == "host" {
 		core, relative, err := metrics.sampleHostCPU(ctx)
 		if err != nil {
@@ -287,6 +285,8 @@ func (p *taskManagerPlugin) sampleSummaryCPUWithCollector(ctx context.Context, s
 		}
 		return cpuMetric(source, core, relative)
 	}
+	p.cpuMu.Lock()
+	defer p.cpuMu.Unlock()
 	core, relative, err := p.sampler.sampleTaskCPU(ctx, cores)
 	if err != nil {
 		return unavailableMetricWithSource(source, err)

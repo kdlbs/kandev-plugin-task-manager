@@ -200,7 +200,6 @@ await page.locator("#ktm-disk-threshold").fill("82");
 await page.evaluate(() => window.__saveMonitorSettings());
 await page.waitForSelector("[data-testid=ktm-monitor-disk]", { timeout: 5000 });
 console.log("disk threshold at value:", await page.locator("[data-testid=ktm-monitor-disk]").innerText());
-const fetchesBeforeDisable = await page.evaluate(() => window.__summaryFetchCount());
 
 await page.locator(".ktm-help-button").focus();
 const focusedHelp = await page.evaluate(() => ({
@@ -219,6 +218,8 @@ for (const checkbox of await page.locator("[id^=ktm-enabled-]").all()) {
   if (await checkbox.isChecked()) await checkbox.uncheck();
 }
 await page.evaluate(() => window.__saveMonitorSettings());
+await page.waitForFunction(() => !document.querySelector('[data-testid="ktm-host-monitor"]'));
+const fetchesBeforeDisable = await page.evaluate(() => window.__summaryFetchCount());
 await page.waitForTimeout(1300);
 const disabledState = await page.evaluate((before) => ({
   monitor: Boolean(document.querySelector("[data-testid=ktm-host-monitor]")),

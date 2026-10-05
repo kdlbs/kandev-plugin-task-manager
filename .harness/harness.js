@@ -203,7 +203,7 @@
     Tooltip: plainComponent("span"),
     TooltipProvider: plainComponent("span"),
     TooltipTrigger: plainComponent("span"),
-    TooltipContent: plainComponent("span"),
+    TooltipContent: ({ id, children }) => h("span", { id, className: "ktm-visually-hidden" }, children),
   };
 
   // Each poll swaps the CPU of the top two tasks, which is the churn that

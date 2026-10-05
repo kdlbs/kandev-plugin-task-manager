@@ -214,3 +214,41 @@ func TestHostSummaryInvalidDiskPathKeepsIndependentMetrics(t *testing.T) {
 		t.Fatalf("invalid disk path was not isolated: %+v", report.Metrics["disk"])
 	}
 }
+
+func TestHostSummaryDiskReadFailureKeepsCPU(t *testing.T) {
+	p := newPlugin()
+	p.hostMetrics = newHostMetricsCollector(&fakeHostMetricsReader{
+		cpu:     []hostCPUTimes{{Total: 100, Idle: 50}, {Total: 200, Idle: 100}},
+		diskErr: errors.New("statfs unavailable"),
+	})
+	p.hostMetrics.sleep = func(context.Context, time.Duration) error { return nil }
+	response, err := p.sampleSummary(context.Background(), summaryRequest{MetricIDs: []string{"disk", "cpu"}, CPUSource: "host"}, defaultMonitorConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report summaryReport
+	if err := json.Unmarshal(response.Body, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Metrics["disk"].Available || report.Metrics["disk"].Error == "" || !report.Metrics["cpu"].Available {
+		t.Fatalf("metrics = %+v", report.Metrics)
+	}
+}
+
+func TestHostCPUDoesNotWaitForTaskCPULock(t *testing.T) {
+	p := newPlugin()
+	p.hostMetrics = newHostMetricsCollector(&fakeHostMetricsReader{cpu: []hostCPUTimes{{Total: 100, Idle: 50}, {Total: 200, Idle: 100}}})
+	p.hostMetrics.sleep = func(context.Context, time.Duration) error { return nil }
+	p.cpuMu.Lock()
+	defer p.cpuMu.Unlock()
+	done := make(chan summaryMetric, 1)
+	go func() { done <- p.sampleSummaryCPUWithCollector(context.Background(), "host", 4, p.hostMetrics) }()
+	select {
+	case metric := <-done:
+		if !metric.Available {
+			t.Fatalf("host CPU = %+v", metric)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("host CPU waits behind the task baseline lock")
+	}
+}

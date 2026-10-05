@@ -42,6 +42,10 @@ func parseLinuxCPUTimes(data []byte) (hostCPUTimes, error) {
 	}
 	var total, idle uint64
 	for index, field := range fields[1:] {
+		// guest and guest_nice are already included in user and nice.
+		if index >= 8 {
+			break
+		}
 		value, err := strconv.ParseUint(field, 10, 64)
 		if err != nil {
 			return hostCPUTimes{}, err
@@ -104,11 +108,35 @@ func parseLinuxMemory(data []byte) (total, available uint64, err error) {
 }
 
 func (r *linuxHostMetricsReader) readCgroupMemory(hostTotal uint64) (hostMemoryReading, bool) {
-	currentRaw, err := os.ReadFile(filepath.Join(r.cgroupRoot, "memory.current"))
+	root := filepath.Clean(r.cgroupRoot)
+	dir := root
+	if data, err := os.ReadFile(filepath.Join(r.procRoot, "self/cgroup")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if path, ok := strings.CutPrefix(line, "0::"); ok {
+				dir = filepath.Join(root, strings.TrimPrefix(filepath.Clean("/"+path), "/"))
+				break
+			}
+		}
+	}
+	var selected hostMemoryReading
+	for {
+		if reading, ok := readCgroupMemoryAt(dir, hostTotal); ok && (selected.TotalBytes == 0 || reading.TotalBytes < selected.TotalBytes) {
+			selected = reading
+		}
+		if dir == root {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	return selected, selected.TotalBytes > 0
+}
+
+func readCgroupMemoryAt(dir string, hostTotal uint64) (hostMemoryReading, bool) {
+	currentRaw, err := os.ReadFile(filepath.Join(dir, "memory.current"))
 	if err != nil {
 		return hostMemoryReading{}, false
 	}
-	limitRaw, err := os.ReadFile(filepath.Join(r.cgroupRoot, "memory.max"))
+	limitRaw, err := os.ReadFile(filepath.Join(dir, "memory.max"))
 	if err != nil {
 		return hostMemoryReading{}, false
 	}
@@ -140,6 +168,11 @@ func (r *linuxHostMetricsReader) readTemperature() (float64, error) {
 		return 0, errors.New("CPU temperature unavailable")
 	}
 	for _, path := range paths {
+		kind, kindErr := os.ReadFile(filepath.Join(filepath.Dir(path), "type"))
+		name := strings.ToLower(strings.TrimSpace(string(kind)))
+		if kindErr != nil || (!strings.Contains(name, "cpu") && !strings.Contains(name, "pkg") && name != "coretemp") {
+			continue
+		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			continue
