@@ -1,9 +1,10 @@
-import { chromium, expect } from "@playwright/test";
+import { chromium, devices, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PLUGIN_ID = "kandev-plugin-task-manager";
+const CHIP_POLL_INTERVAL_MS = 4_000;
 const hostUrl = process.env.KANDEV_URL;
 const packageFile = process.env.PACKAGE_FILE;
 const hostAction = process.env.HOST_ACTION;
@@ -16,7 +17,9 @@ if (!["localhost", "127.0.0.1", "::1"].includes(base.hostname)) {
   throw new Error("The host smoke test only accepts a disposable loopback Kandev host.");
 }
 const archive = resolve(packageFile);
-const outputDir = resolve(dirname(fileURLToPath(import.meta.url)), "screenshots");
+const outputDir = resolve(
+  process.env.SMOKE_ARTIFACT_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "screenshots"),
+);
 await mkdir(outputDir, { recursive: true });
 
 const sampleReport = {
@@ -52,16 +55,11 @@ const sampleReport = {
 
 const browser = await chromium.launch();
 const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-const mobile = await browser.newContext({
-  viewport: { width: 393, height: 851 },
-  deviceScaleFactor: 2,
-  hasTouch: true,
-  isMobile: true,
-});
+const mobile = await browser.newContext({ ...devices["Pixel 5"] });
 const page = await desktop.newPage();
 const mobilePage = await mobile.newPage();
 let installed = false;
-let usageRequests = 0;
+const usageRequests = { desktop: 0, mobile: 0 };
 for (const [name, target] of [["desktop", page], ["mobile", mobilePage]]) {
   target.on("crash", () => console.error(`${name} browser page crashed.`));
   target.on("pageerror", (error) => console.error(`${name} page error: ${error.message}`));
@@ -70,9 +68,9 @@ for (const [name, target] of [["desktop", page], ["mobile", mobilePage]]) {
   });
 }
 
-async function useSyntheticUsage(target) {
+async function useSyntheticUsage(target, device) {
   await target.route(`**/api/plugins/${PLUGIN_ID}/webhooks/usage`, async (route) => {
-    usageRequests += 1;
+    usageRequests[device] += 1;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -96,7 +94,7 @@ try {
   for (const context of [desktop, mobile]) {
     await context.addInitScript(() => localStorage.setItem("kandev.onboarding.completed", "true"));
   }
-  await useSyntheticUsage(page);
+  await useSyntheticUsage(page, "desktop");
   const workspaceListResponse = await page.request.get(new URL("/api/v1/workspaces", base).href);
   if (!workspaceListResponse.ok()) {
     throw new Error(`Could not list workspaces on the disposable host (HTTP ${workspaceListResponse.status()}).`);
@@ -151,8 +149,17 @@ try {
   if (!desktopBox || desktopBox.x < 0 || desktopBox.x + desktopBox.width > 1440) {
     throw new Error("The top-bar action does not fit the desktop viewport.");
   }
+  if (hostAction === "1") {
+    const finePointer = await page.evaluate(() => matchMedia("(pointer: fine)").matches);
+    if (!finePointer || Math.abs(desktopBox.height - 28) > 0.5) {
+      throw new Error(
+        `Desktop Action is ${desktopBox.width}x${desktopBox.height}px with fine pointer=${finePointer}; expected host-owned 28px density.`,
+      );
+    }
+  }
 
   await desktopAction.focus();
+  await expect(desktopAction).toBeFocused();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Task Manager", exact: true });
   await expect(dialog).toBeVisible();
@@ -160,13 +167,19 @@ try {
   await expect(dialog.getByRole("button", { name: /Synthetic CPU fixture task/ })).toBeVisible({
     timeout: 10_000,
   });
-  await expect.poll(() => usageRequests).toBeGreaterThan(0);
+  await expect.poll(() => usageRequests.desktop, { timeout: 10_000 }).toBeGreaterThan(1);
   await page.screenshot({ path: `${outputDir}/host-${hostAction === "1" ? "action" : "legacy"}-desktop.png` });
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+  await page.keyboard.press("Control+Shift+Escape");
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 
-  await useSyntheticUsage(mobilePage);
+  await useSyntheticUsage(mobilePage, "mobile");
   await mobilePage.goto(new URL("/tasks", base).href);
+  const coarsePointer = await mobilePage.evaluate(() => matchMedia("(pointer: coarse)").matches);
+  if (!coarsePointer) throw new Error("The Pixel 5 mobile context did not expose a coarse pointer.");
   const navTrigger = mobilePage.getByTestId("app-nav-trigger");
   await expect(navTrigger).toBeVisible();
   await navTrigger.tap();
@@ -203,6 +216,11 @@ try {
   await page.goto(new URL("/tasks", base).href);
   await expect(desktopAction).toHaveCount(0);
   await expect(page.locator(".ktm-chip")).toHaveCount(0);
+  const requestsWhenDisabled = usageRequests.desktop;
+  await page.waitForTimeout(CHIP_POLL_INTERVAL_MS + 250);
+  if (usageRequests.desktop !== requestsWhenDisabled) {
+    throw new Error("The disabled desktop Action kept polling synthetic usage data.");
+  }
 
   await page.goto(new URL("/settings/plugins", base).href);
   await pluginRow.getByRole("button", { name: "Enable" }).click();
@@ -210,7 +228,10 @@ try {
   await page.goto(new URL("/tasks", base).href);
   await expect(actionButton(page)).toBeVisible({ timeout: 15_000 });
   await assertControlPath(page);
-  console.log(`PASS: packaged plugin ${PLUGIN_ID}, ${hostAction === "1" ? "Action" : "legacy"} path, desktop, mobile touch, keyboard, disable/re-enable, synthetic usage reports.`);
+  await expect.poll(() => usageRequests.desktop, { timeout: 10_000 }).toBeGreaterThan(requestsWhenDisabled);
+  console.log(
+    `PASS: packaged plugin ${PLUGIN_ID}, ${hostAction === "1" ? "Action" : "legacy"} path, desktop Action ${desktopBox?.width}x${desktopBox?.height}px, Pixel 5 target ${mobileBox.width}x${mobileBox.height}px (coarse pointer), keyboard/keybinding, polling lifecycle, disable/re-enable, synthetic usage reports.`,
+  );
 } finally {
   if (installed) {
     const response = await page.request.delete(new URL(`/api/plugins/${PLUGIN_ID}`, base).href);
