@@ -1,7 +1,7 @@
 name: release
 
-# Manual releases validate and package a candidate before they update main or tags.
-# Pushed version tags run the same checks before GitHub publishes assets.
+# Manual releases serialize candidate preparation and push a version tag only
+# after validation. The pushed tag is validated and published exactly once.
 on:
   push:
     tags:
@@ -24,7 +24,9 @@ on:
         default: false
 
 concurrency:
-  group: plugin-release
+  # Keep dispatches serialized; each pushed tag is independent so a later
+  # version tag cannot replace an earlier pending publication.
+  group: plugin-release-${{ github.event_name == 'workflow_dispatch' && 'manual' || github.ref }}
   cancel-in-progress: false
 
 permissions:

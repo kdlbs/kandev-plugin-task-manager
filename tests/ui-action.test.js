@@ -31,7 +31,13 @@ function installDocument() {
   };
 }
 
-async function loadPlugin({ action = false, i18n = true, registerTranslations = true, report = null } = {}) {
+async function loadPlugin({
+  action = false,
+  uiNamespace = true,
+  i18n = true,
+  registerTranslations = true,
+  report = null,
+} = {}) {
   let pluginId;
   let definition;
   Object.defineProperty(globalThis, "window", {
@@ -69,13 +75,13 @@ async function loadPlugin({ action = false, i18n = true, registerTranslations = 
       useEffect() {},
     },
     jsx: element,
-    ui,
     api: { fetch: () => Promise.reject(new Error("unexpected usage request")) },
     openModal(options) {
       modals.push(options);
       return { close() {} };
     },
   };
+  if (uiNamespace) host.ui = ui;
   if (i18n) {
     let catalog = {};
     host.i18n = {
@@ -168,4 +174,13 @@ test("uses the desktop legacy presentation outside the mobile slot surface", asy
   const chip = loaded.components[0].component({ slotProps: { presentation: "desktop" } });
 
   assert.equal(chip.props.style, null);
+});
+
+test("keeps the legacy CPU meter when the host omits the ui namespace", async () => {
+  const loaded = await loadPlugin({ uiNamespace: false, i18n: false, registerTranslations: false, report: sampleReport });
+  const chip = loaded.components[0].component({ slotProps: { presentation: "desktop" } });
+
+  assert.equal(loaded.host.ui, undefined);
+  assert.equal(chip.type, "button");
+  assert.equal(chip.children[2].children[0], "36%");
 });

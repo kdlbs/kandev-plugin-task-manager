@@ -63,6 +63,8 @@ done
 
 symlink_path=$(find "$package_dir" -type l -print -quit)
 [ -z "$symlink_path" ] || fail "package contains a symlink: ${symlink_path#"$package_dir"/}"
+special_path=$(find "$package_dir" ! -type f ! -type d -print -quit)
+[ -z "$special_path" ] || fail "package contains a special file: ${special_path#"$package_dir"/}"
 
 forbidden_path=$(find "$package_dir" \
 	\( -name .build -o -name .harness -o -name docs -o -name scripts \

@@ -15,6 +15,15 @@ make_fixture() {
 	cp "$repo_dir/Makefile" "$repo_dir/manifest.yaml" "$fixture/"
 }
 
+set_fixture_version() {
+	fixture=$1
+	version=$2
+	sed "s/^version: .*/version: \"$version\"/" "$fixture/manifest.yaml" > "$fixture/manifest.next"
+	mv "$fixture/manifest.next" "$fixture/manifest.yaml"
+	sed "s/^VERSION := .*/VERSION := $version/" "$fixture/Makefile" > "$fixture/Makefile.next"
+	mv "$fixture/Makefile.next" "$fixture/Makefile"
+}
+
 expect_failure() {
 	name=$1
 	fixture=$2
@@ -63,8 +72,34 @@ tar -czf "$test_dir/matching-package/$package_file" -C "$test_dir/matching-packa
 (cd "$test_dir/matching-package" && sh "$verify_script" "v$base_version" "$package_file")
 
 make_fixture prerelease
-sed -i -E 's/^version: "[^"]+"$/version: "0.2.0-rc.1"/' "$test_dir/prerelease/manifest.yaml"
-sed -i -E 's/^VERSION := .+$/VERSION := 0.2.0-rc.1/' "$test_dir/prerelease/Makefile"
+set_fixture_version "$test_dir/prerelease" 0.2.0-rc.1
 (cd "$test_dir/prerelease" && sh "$verify_script" v0.2.0-rc.1)
+
+make_fixture build-metadata
+set_fixture_version "$test_dir/build-metadata" 0.2.0-rc.1+build.7
+(cd "$test_dir/build-metadata" && sh "$verify_script" v0.2.0-rc.1+build.7)
+
+for invalid_tag in \
+	v01.2.3 v1.02.3 v1.2.03 v1.2.3- v1.2.3-.alpha \
+	v1.2.3-alpha. v1.2.3-alpha..1 v1.2.3-01 v1.2.3-1.01; do
+	make_fixture "invalid-${invalid_tag#v}"
+	expect_failure "malformed SemVer tag $invalid_tag" "$test_dir/invalid-${invalid_tag#v}" "$invalid_tag"
+done
+
+make_fixture malformed-manifest
+set_fixture_version "$test_dir/malformed-manifest" 01.2.3
+expect_failure 'matching non-SemVer manifest and Makefile' "$test_dir/malformed-manifest" v1.2.3
+
+make_fixture malformed-makefile
+sed 's/^VERSION := .*/VERSION := 0.1.03/' "$test_dir/malformed-makefile/Makefile" > "$test_dir/malformed-makefile/Makefile.next"
+mv "$test_dir/malformed-makefile/Makefile.next" "$test_dir/malformed-makefile/Makefile"
+expect_failure 'a non-SemVer Makefile version' "$test_dir/malformed-makefile" "v$base_version"
+
+make_fixture malformed-package
+mkdir -p "$test_dir/malformed-package/archive"
+sed 's/^version: .*/version: "0.1.03"/' "$test_dir/malformed-package/manifest.yaml" > "$test_dir/malformed-package/archive/manifest.yaml"
+package_file=$(cd "$test_dir/malformed-package" && make -s package-file)
+tar -czf "$test_dir/malformed-package/$package_file" -C "$test_dir/malformed-package/archive" manifest.yaml
+expect_failure 'a package with a non-SemVer manifest version' "$test_dir/malformed-package" "v$base_version" "$package_file"
 
 printf 'release version negative tests passed\n'

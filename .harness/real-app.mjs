@@ -2,6 +2,7 @@ import { chromium, devices, expect } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoopbackUrl } from "./loopback.mjs";
 
 const PLUGIN_ID = "kandev-plugin-task-manager";
 const CHIP_POLL_INTERVAL_MS = 4_000;
@@ -13,7 +14,7 @@ if (!hostUrl || !packageFile || !["0", "1"].includes(hostAction || "")) {
 }
 
 const base = new URL(hostUrl);
-if (!["localhost", "127.0.0.1", "::1"].includes(base.hostname)) {
+if (!isLoopbackUrl(hostUrl)) {
   throw new Error("The host smoke test only accepts a disposable loopback Kandev host.");
 }
 const archive = resolve(packageFile);

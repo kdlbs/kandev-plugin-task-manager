@@ -1,7 +1,8 @@
 // Renders the shipped bundle against deterministic task and process fixtures.
 (function () {
   const CORES = 8;
-  const LONG_CMD = "node ./fixtures/fake-worker.js --mode=sample --input=synthetic-value";
+  const LONG_CMD =
+    "node ./fixtures/fake-worker.js --mode=sample --input=synthetic-value --payload=" + "x".repeat(512);
 
   function proc(pid, name, cpu, mem, command) {
     return { pid, ppid: 1, name, cpu_percent: cpu, memory_bytes: mem * 1024 * 1024, command };

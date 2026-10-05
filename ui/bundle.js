@@ -1084,7 +1084,7 @@
           })
         : `Open Task Manager · CPU ${percent} · Shortcut: ${HOTKEY_HINT}`;
 
-      if (typeof ui.Action === "function") {
+      if (ui && typeof ui.Action === "function") {
         return h(ui.Action, {
           label,
           icon: cpuIcon(h),

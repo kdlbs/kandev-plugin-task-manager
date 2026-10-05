@@ -1,4 +1,4 @@
-.PHONY: build test test-backend test-ui test-package-verifier test-release-version test-harness smoke-package live fmt check-format vet package package-host verify-package verify-package-host package-file clean
+.PHONY: build test test-backend test-ui test-package-verifier test-release-version test-harness-server test-harness smoke-package live fmt check-format vet package package-host verify-package verify-package-host package-file clean
 
 BIN := bin/kandev-plugin-task-manager
 VERSION := 0.1.3
@@ -10,7 +10,7 @@ build:
 	mkdir -p bin
 	go build -o $(BIN) ./server
 
-test: test-backend test-ui test-package-verifier test-release-version
+test: test-backend test-ui test-package-verifier test-release-version test-harness-server
 
 test-backend:
 	go test ./server/...
@@ -23,6 +23,9 @@ test-package-verifier:
 
 test-release-version:
 	sh scripts/test-verify-release-version.sh
+
+test-harness-server:
+	node --test .harness/server.test.mjs
 
 test-harness:
 	npm run test:layout --prefix .harness

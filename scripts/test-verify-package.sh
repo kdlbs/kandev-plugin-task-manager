@@ -113,6 +113,11 @@ ln -s ui/bundle.js "$test_dir/unexpected-symlink/extra-link"
 write_checksums "$test_dir/unexpected-symlink"
 expect_failure 'an unexpected symlink' "$test_dir/unexpected-symlink"
 
+copy_fixture unexpected-fifo
+mkfifo "$test_dir/unexpected-fifo/extra-pipe"
+write_checksums "$test_dir/unexpected-fifo"
+expect_failure 'an unexpected FIFO' "$test_dir/unexpected-fifo"
+
 copy_fixture non-executable-binary
 chmod -x "$test_dir/non-executable-binary/server/plugin-linux-amd64"
 write_checksums "$test_dir/non-executable-binary"
@@ -122,7 +127,12 @@ copy_fixture wrong-host-platform
 expect_failure 'a host platform missing from the manifest' "$test_dir/wrong-host-platform" host freebsd-amd64
 
 copy_fixture extra-platform
-sed '/    windows-amd64:/a\    freebsd-amd64: "server/plugin-freebsd-amd64"' "$test_dir/extra-platform/manifest.yaml" > "$test_dir/extra-platform/manifest.next"
+awk '
+	{ print }
+	$0 == "    windows-amd64: \"server/plugin-windows-amd64.exe\"" {
+		print "    freebsd-amd64: \"server/plugin-freebsd-amd64\""
+	}
+' "$test_dir/extra-platform/manifest.yaml" > "$test_dir/extra-platform/manifest.next"
 mv "$test_dir/extra-platform/manifest.next" "$test_dir/extra-platform/manifest.yaml"
 write_checksums "$test_dir/extra-platform"
 expect_failure 'an unexpected declared platform' "$test_dir/extra-platform"

@@ -134,10 +134,11 @@ make verify-package-host
 make verify-package
 ```
 
-`make test` runs Go tests, UI contract tests, and negative package and release
-checks. `make verify-package-host` builds and checks one platform. The full
-package command cross-compiles every platform in `manifest.yaml`, then checks
-the file list and SHA-256 checksums.
+`make test` runs Go tests, UI contract tests, negative package and release
+checks, and the static-server and loopback tests for the browser harness.
+`make verify-package-host` builds and checks one platform. The full package
+command cross-compiles every platform in `manifest.yaml`, then checks the file
+list and SHA-256 checksums.
 
 The release workflow runs from `main`. It selects a version bump, checks the
 candidate, and builds the full package before it commits a version or tag. A

@@ -21,11 +21,12 @@ export async function startStaticServer(rootDir) {
         return;
       }
       if ((await stat(filePath)).isDirectory()) filePath = resolve(filePath, "index.html");
+      const contents = await readFile(filePath);
       response.writeHead(200, {
         "content-type": CONTENT_TYPES[extname(filePath)] || "application/octet-stream",
         "cache-control": "no-store",
       });
-      response.end(await readFile(filePath));
+      response.end(contents);
     } catch {
       response.writeHead(404).end("Not found");
     }
