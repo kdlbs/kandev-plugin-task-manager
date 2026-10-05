@@ -1,7 +1,14 @@
-import { chromium } from "/home/jcfs/playground/kandev/apps/web/node_modules/@playwright/test/index.mjs";
+import { chromium } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { startStaticServer } from "./server.mjs";
 
-const BASE = process.env.HARNESS_URL || "http://127.0.0.1:8977/.harness/index.html";
-const OUT = process.env.HARNESS_OUT || "/home/jcfs/kandev-plugins/kandev-plugin-task-manager/.harness";
+const REPO_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const OUT = resolve(process.env.HARNESS_OUT || resolve(REPO_DIR, ".harness/screenshots"));
+await mkdir(OUT, { recursive: true });
+const staticServer = process.env.HARNESS_URL ? null : await startStaticServer(REPO_DIR);
+const BASE = process.env.HARNESS_URL || `${staticServer.url}/.harness/index.html`;
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
@@ -131,7 +138,7 @@ if (clipping.length) {
 await page.screenshot({ path: `${OUT}/02-expanded-dark.png` });
 
 // Filter.
-await page.locator(".ktm-filter").fill("vitest");
+await page.locator(".ktm-filter").fill("fake-worker");
 await page.waitForTimeout(300);
 console.log("rows after filtering for a process name:", await page.locator(".ktm-task").count());
 await page.screenshot({ path: `${OUT}/04-filtered.png` });
@@ -202,7 +209,7 @@ console.log("process rows still shown:", await page.locator(".ktm-proc").count()
 // Values must still be live while a row is open.
 const cpuCells = () =>
   page
-    .locator(".ktm-task", { hasText: "Use shared formatBytes" })
+    .locator(".ktm-task", { hasText: "Synthetic workload alpha" })
     .locator(".ktm-cpu")
     .first()
     .innerText();
@@ -219,7 +226,7 @@ await page.waitForTimeout(400);
 
 // A steadily climbing task must eventually rise through the ranks: holding
 // the order must not mean ignoring real change forever.
-const climber = "Idle background task number 8";
+const climber = "Synthetic idle task 8";
 const rankOf = async () => (await titles()).findIndex((t) => t.startsWith(climber));
 await page.evaluate(() => window.__resetClimb());
 // Let it fall back to idle and the list settle there before measuring.
@@ -237,7 +244,7 @@ console.log(`climbing task rank: ${rankBefore} -> ${rankAfter} (rose: ${rankAfte
 await page.evaluate(() => window.__resetClimb());
 await page.mouse.move(5, 5);
 await page.waitForTimeout(1500);
-const straddler = "Idle background task number 7";
+const straddler = "Synthetic idle task 7";
 const whereIs = async () => {
   const inWorking = await page
     .locator(".ktm-list > .ktm-task", { hasText: straddler })
@@ -257,5 +264,61 @@ if (hops > 1) {
 }
 
 await page.screenshot({ path: `${OUT}/07-stable.png` });
+
+// The Action path above has no .ktm-chip-value. Exercise the older-host path
+// separately so its live percentage and inherited button colour stay covered.
+if (!process.env.HARNESS_URL) {
+  const legacyPage = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  const legacyUrl = new URL(BASE);
+  legacyUrl.searchParams.set("host", "legacy");
+  await legacyPage.goto(legacyUrl.href, { waitUntil: "networkidle" });
+  await legacyPage.waitForSelector(".ktm-chip-value", { timeout: 10000 });
+  await legacyPage.waitForFunction(
+    () => {
+      const text = document.querySelector(".ktm-chip-value")?.textContent || "";
+      return text !== "0%" && /^\d+(?:\.\d+)?%$/.test(text);
+    },
+    null,
+    { timeout: 10000 },
+  );
+  const firstReading = await legacyPage.evaluate(() => ({
+    text: document.querySelector(".ktm-chip-value").textContent,
+    pollCount: window.__pollCount(),
+  }));
+  await legacyPage.waitForFunction(
+    ({ previousText, previousPollCount }) => {
+      const text = document.querySelector(".ktm-chip-value")?.textContent || "";
+      return (
+        window.__pollCount() > previousPollCount &&
+        text !== "0%" &&
+        /^\d+(?:\.\d+)?%$/.test(text) &&
+        text !== previousText
+      );
+    },
+    { previousText: firstReading.text, previousPollCount: firstReading.pollCount },
+    { timeout: 10000 },
+  );
+  const legacyChip = await legacyPage.evaluate(() => {
+    const value = document.querySelector(".ktm-chip-value");
+    return {
+      text: value.innerText,
+      valueColor: getComputedStyle(value).color,
+      buttonColor: getComputedStyle(value.closest("button")).color,
+      bodyColor: getComputedStyle(document.body).color,
+    };
+  });
+  console.log("legacy chip poll/style:", JSON.stringify({ firstReading, ...legacyChip }));
+  if (
+    !/\d+(?:\.\d+)?%/.test(legacyChip.text) ||
+    legacyChip.buttonColor !== legacyChip.bodyColor ||
+    legacyChip.valueColor !== legacyChip.bodyColor
+  ) {
+    console.error("FAIL: legacy chip value is missing or does not inherit the visible foreground colour");
+    process.exitCode = 1;
+  }
+  await legacyPage.close();
+}
+
 console.log("console errors:", errors.length ? errors.slice(0, 5) : "none");
 await browser.close();
+if (staticServer) await staticServer.close();

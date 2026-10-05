@@ -1,4 +1,4 @@
-name: CI
+name: Build
 
 on:
   pull_request:
@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Format, vet, and test
+  package:
+    name: Build and verify plugin packages
     runs-on: ubuntu-latest
     steps:
       - name: Check out plugin
@@ -44,30 +44,10 @@ jobs:
           go-version-file: plugin/go.mod
           cache-dependency-path: plugin/go.sum
 
-      - name: Set up Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: 24
-
-      - name: Check module files are tidy
+      - name: Build plugin binary
         working-directory: plugin
-        run: |
-          set -euo pipefail
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
+        run: make build
 
-      - name: Check formatting
+      - name: Build and verify all supported packages
         working-directory: plugin
-        run: make check-format
-
-      - name: Vet
-        working-directory: plugin
-        run: make vet
-
-      - name: Test
-        working-directory: plugin
-        run: make test
-
-      - name: Package current platform
-        working-directory: plugin
-        run: make package-host
+        run: make verify-package
