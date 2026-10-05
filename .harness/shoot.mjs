@@ -273,6 +273,31 @@ if (!process.env.HARNESS_URL) {
   legacyUrl.searchParams.set("host", "legacy");
   await legacyPage.goto(legacyUrl.href, { waitUntil: "networkidle" });
   await legacyPage.waitForSelector(".ktm-chip-value", { timeout: 10000 });
+  await legacyPage.waitForFunction(
+    () => {
+      const text = document.querySelector(".ktm-chip-value")?.textContent || "";
+      return text !== "0%" && /^\d+(?:\.\d+)?%$/.test(text);
+    },
+    null,
+    { timeout: 10000 },
+  );
+  const firstReading = await legacyPage.evaluate(() => ({
+    text: document.querySelector(".ktm-chip-value").textContent,
+    pollCount: window.__pollCount(),
+  }));
+  await legacyPage.waitForFunction(
+    ({ previousText, previousPollCount }) => {
+      const text = document.querySelector(".ktm-chip-value")?.textContent || "";
+      return (
+        window.__pollCount() > previousPollCount &&
+        text !== "0%" &&
+        /^\d+(?:\.\d+)?%$/.test(text) &&
+        text !== previousText
+      );
+    },
+    { previousText: firstReading.text, previousPollCount: firstReading.pollCount },
+    { timeout: 10000 },
+  );
   const legacyChip = await legacyPage.evaluate(() => {
     const value = document.querySelector(".ktm-chip-value");
     return {
@@ -282,7 +307,7 @@ if (!process.env.HARNESS_URL) {
       bodyColor: getComputedStyle(document.body).color,
     };
   });
-  console.log("legacy chip style:", JSON.stringify(legacyChip));
+  console.log("legacy chip poll/style:", JSON.stringify({ firstReading, ...legacyChip }));
   if (
     !/\d+(?:\.\d+)?%/.test(legacyChip.text) ||
     legacyChip.buttonColor !== legacyChip.bodyColor ||
