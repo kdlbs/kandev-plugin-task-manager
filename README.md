@@ -155,16 +155,22 @@ make test-harness
 For host review, build the package and upload it to an isolated local Kandev
 host. Route the usage request to synthetic data, then run the desktop and mobile
 checks. `HOST_ACTION=1` checks the Action path. `HOST_ACTION=0` checks the legacy
-path. The host source revision must match the selected mode.
+path. Use a host that includes the Action API for mode `1`, or a pre-Action API v1
+host for mode `0`. Keep the host's home directory, database, and temporary files
+inside a task-owned disposable directory.
 
 ```sh
-make package
-KANDEV_URL=http://127.0.0.1:18080 PACKAGE_FILE=kandev-plugin-task-manager-0.1.1.tar.gz HOST_ACTION=1 make smoke-package
+make verify-package-host
+KANDEV_URL=http://127.0.0.1:18080 \
+  PACKAGE_FILE="$(make package-file)" \
+  HOST_ACTION=1 make smoke-package
 ```
 
-The browser check covers keyboard activation, mobile touch size and fit, and
-disable/re-enable behavior. The standalone browser harness does not certify a
-host release. This repository does not set a minimum host version.
+The rendered-host check covers accessible keyboard activation and the registered
+shortcut, mobile touch size and fit, usage polling, and disable/re-enable
+behavior. It validates only the selected package and host version; the layout
+fixture alone does not certify host compatibility. This repository does not set
+a minimum host version.
 
 The live process diagnostic is optional. It samples the machine where it runs:
 
