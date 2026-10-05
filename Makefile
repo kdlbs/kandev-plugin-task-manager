@@ -26,14 +26,13 @@ test-release-version:
 
 test-harness-server:
 	node --test .harness/server.test.mjs
-
 test-harness:
 	npm run test:layout --prefix .harness
 
 ## Smoke-test an already built package in a disposable local host. Requires KANDEV_URL and PACKAGE_FILE.
 smoke-package:
 	test -n "$(KANDEV_URL)" -a -n "$(PACKAGE_FILE)"
-	KANDEV_URL="$(KANDEV_URL)" PACKAGE_FILE="$(PACKAGE_FILE)" HOST_ACTION="$(HOST_ACTION)" npm run test:host --prefix .harness
+	KANDEV_URL="$(KANDEV_URL)" PACKAGE_FILE="$(abspath $(PACKAGE_FILE))" npm run test:host --prefix .harness
 
 ## Sample this machine and print the per-task rollup. This diagnostic does not run during `make test`.
 live:

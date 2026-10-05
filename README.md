@@ -1,6 +1,7 @@
 # Kandev Task Manager
 
-Per-task CPU and memory for your running Kandev agents. Press
+Per-task CPU and memory for your running Kandev agents, plus a configurable
+host monitor in the top bar. Press
 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd> (<kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>Esc</kbd>
 on macOS) and see which task is actually eating the machine.
 
@@ -35,6 +36,39 @@ to the task.
 
 ![Filtering by a process command line](docs/media/filter.png)
 
+### Host monitor
+
+The top bar can show host CPU, host memory, filesystem capacity, CPU
+temperature, and one-minute system load. Open **Settings → Plugins → Task
+Manager** to enable readings, choose their units, and change their order. The
+CPU, memory, and disk readings can each have an independent capacity bar.
+
+The default keeps the existing CPU task-per-core reading and bar. Host-relative
+CPU and task-relative CPU use a 0%-100% whole-machine scale. Task-per-core CPU
+uses 100% for one logical core and can exceed 100% for parallel work.
+
+The CPU percentage-only mode uses the host Action component when available.
+Progress bars and multiple readings use the rich monitor control.
+Older hosts use the rich control for all modes.
+
+Host monitor display choices are personal and sync through Kandev's per-user
+plugin storage. The refresh interval and disk path are administrator settings;
+they apply to all users of the installation. The refresh interval accepts any
+whole-second value from 1 through 300. A failed or unsupported reading is shown
+as unavailable instead of as zero.
+
+With Kandev authentication disabled, all browsers share the local default profile
+and its display settings. The plugin uses the host API, not a separate login.
+
+Disk monitoring reads filesystem capacity metadata for the configured path. It
+does not scan files or directories. A disk visibility threshold hides the
+reading from the top bar below the threshold, but it does not stop sampling.
+
+A disk call that exceeds its deadline makes the reading unavailable.
+Only one operating-system disk call can remain in flight.
+If that call stays blocked, later disk requests fail within a bounded interval
+until it returns or the plugin restarts. Other monitor readings remain available.
+
 ## How attribution works
 
 Kandev exports `KANDEV_TASK_ID` and `KANDEV_SESSION_ID` into every agent's
@@ -60,16 +94,16 @@ Note that `/proc/<pid>/environ` reflects the environment a process was given at
 
 ## Platform support
 
-| Platform | Process table | CPU | Memory | Environment |
-| --- | --- | --- | --- | --- |
-| Linux | `/proc` | `utime`+`stime` delta | **PSS** via `smaps_rollup`, falling back to RSS | `/proc/<pid>/environ` |
-| macOS | `ps` | `TIME` delta (centisecond resolution) | RSS | `sysctl KERN_PROCARGS2` |
-| Windows | Toolhelp32 | `GetProcessTimes` | Working set | PEB via `ReadProcessMemory` |
+| Platform | Task process monitor | Host CPU / memory / disk | Temperature / load |
+| --- | --- | --- | --- |
+| Linux | `/proc`; **PSS** via `smaps_rollup`, falling back to RSS | `/proc`, `statfs` | thermal zones, `/proc/loadavg` when available |
+| macOS | `ps`; RSS | `sysctl`, `statfs` | load when available; temperature unavailable |
+| Windows | Toolhelp32; working set | `GetSystemTimes`, `GlobalMemoryStatusEx`, `GetDiskFreeSpaceEx` | unavailable |
 
-Memory marked with `*` is RSS, which counts pages shared between a parent and
-its children in *every* process, so a tree total reads high. Linux reports PSS
-where it can, which splits shared pages proportionally and can be summed
-honestly.
+Task memory marked with `*` is RSS, which counts pages shared between a parent
+and its children in *every* process, so a tree total reads high. Linux reports
+PSS where it can, which splits shared pages proportionally and can be summed
+honestly. Host memory is a separate operating-system capacity reading.
 
 > **Windows is untested.** It compiles and its parsers are unit-tested, but the
 > syscall path has never been run on a Windows machine. It fails soft: if the
@@ -83,30 +117,28 @@ Download the tarball from [Releases](../../releases), then either:
 - **Settings → Plugins → Install** and upload it, or
 - drop it in `~/.kandev/plugins/` and press **Sync**.
 
-The hotkey is remappable in **Settings → Plugins → Task Manager**. A CPU chip
-also appears in the top bar on the Kanban and Tasks views, and opens the same
-panel.
+The hotkey is remappable in **Settings → Plugins → Task Manager**. The host
+monitor also appears in the top bar on the Kanban and Tasks views, and opens the
+same panel.
 
-The plugin requests `api_read: tasks` to show task titles. Its usage webhook
-requires an authenticated host session. The manifest keeps plugin API v1 and
-does not set `min_kandev_version`. A host with `host.ui.Action` shows a CPU
-icon and percentage. An older compatible host keeps the current chip and its
-meter.
-
-![The panel open over the Kanban board, with the CPU chip in the top bar](docs/media/in-app.png)
+![The panel open over the Kanban board, with the host monitor in the top bar](docs/media/in-app.png)
 
 ## Cost
 
-The top-bar chip polls every 4 seconds while its component is mounted. The
-panel polls every 1.2 seconds while it is open.
+The detailed panel is request-driven: with the panel closed, it does not scan
+the task process table. The host monitor has its own administrator-configured
+poller so it can remain visible in the top bar. It samples only the enabled
+families and stops polling when all readings are disabled.
 
-A warm poll costs about **30 ms** on a machine running 24 tasks across 748
-processes — essentially the cost of one `/proc` scan. Reading PSS for every
-attributed process costs an order of magnitude more (~370 ms), so memory is
-refreshed on its own slower cadence and reused in between. CPU percentages come
-from a delta of cumulative CPU time across a 700 ms window, never from a
-lifetime average like `ps %cpu`, which would report an agent that was busy an
-hour ago as busy now.
+A warm task-panel poll costs about **30 ms** on a machine running 24 tasks
+across 748 processes — essentially the cost of one `/proc` scan. Reading PSS
+for every attributed process costs an order of magnitude more (~370 ms), so
+the detailed panel refreshes memory on its own slower cadence. The ambient task
+CPU path does not read PSS, task memory, command lines, or task titles.
+
+Host memory and disk use operating-system capacity metadata. CPU percentages
+come from a delta of cumulative counters across a 700 ms window, never from a
+lifetime average like `ps %cpu`.
 
 ## Development
 
@@ -154,17 +186,16 @@ make test-harness
 ```
 
 For host review, build the package and upload it to an isolated local Kandev
-host. Route the usage request to synthetic data, then run the desktop and mobile
-checks. `HOST_ACTION=1` checks the Action path. `HOST_ACTION=0` checks the legacy
-path. Use a host that includes the Action API for mode `1`, or a pre-Action API v1
-host for mode `0`. Keep the host's home directory, database, and temporary files
-inside a task-owned disposable directory.
+host. The smoke test supplies synthetic usage and summary reports.
+It verifies the default rich monitor on desktop and mobile.
+The unit tests and browser harness also cover the compact host Action mode.
+Keep the home directory, database, and temporary files inside a task-owned disposable directory.
 
 ```sh
 make verify-package-host
 KANDEV_URL=http://127.0.0.1:18080 \
   PACKAGE_FILE="$(make package-file)" \
-  HOST_ACTION=1 make smoke-package
+  make smoke-package
 ```
 
 The rendered-host check covers accessible keyboard activation and the registered

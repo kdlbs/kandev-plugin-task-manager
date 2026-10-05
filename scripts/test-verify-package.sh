@@ -73,6 +73,16 @@ done
 write_checksums "$host_fixture"
 sh "$verify_script" "$host_fixture" host "$host_platform" >/dev/null
 
+# The current SDK rewrites a host-only manifest with four-space YAML
+# indentation, unquoted paths, and only the selected platform.
+normalized_fixture=$test_dir/host-normalized
+mkdir -p "$normalized_fixture"
+cp -R "$host_fixture/." "$normalized_fixture/"
+printf 'runtime:\n    type: binary\n    executables:\n        %s: %s\n' "$host_platform" "$host_executable" > "$normalized_fixture/manifest.yaml"
+write_checksums "$normalized_fixture"
+sh "$verify_script" "$normalized_fixture" host "$host_platform" >/dev/null
+expect_failure 'host-only manifest in a full package' "$normalized_fixture" full
+
 for required in manifest.yaml ui/bundle.js \
 	server/plugin-linux-amd64 server/plugin-linux-arm64 \
 	server/plugin-darwin-amd64 server/plugin-darwin-arm64 \

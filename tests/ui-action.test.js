@@ -37,6 +37,7 @@ async function loadPlugin({
   i18n = true,
   registerTranslations = true,
   report = null,
+  showBar = false,
 } = {}) {
   let pluginId;
   let definition;
@@ -64,7 +65,7 @@ async function loadPlugin({
     React: {
       useState(initial) {
         const state = typeof initial === "function" ? initial() : initial;
-        return [{ ...state, report }, () => {}];
+        return [state && typeof state === "object" && "report" in state ? { ...state, report } : state, () => {}];
       },
       useRef(initial) {
         return { current: initial };
@@ -76,6 +77,10 @@ async function loadPlugin({
     },
     jsx: element,
     api: { fetch: () => Promise.reject(new Error("unexpected usage request")) },
+    storage: {
+      async get() { return { value: { version: 1, metrics: [{ id: "cpu", enabled: true, mode: "tasks_per_core", show_bar: showBar }] } }; },
+      async set() {},
+    },
     openModal(options) {
       modals.push(options);
       return { close() {} };
@@ -89,7 +94,7 @@ async function loadPlugin({
         return {
           t(key, options = {}) {
             const message = catalog[key] || options.defaultValue || key;
-            return message.replace(/\{\{(\w+)\}\}/g, (_match, name) => options.values?.[name] ?? "");
+            return message.replace(/\{\{(\w+)\}\}/g, (match, name) => options.values?.[name] ?? match);
           },
         };
       },
@@ -114,12 +119,13 @@ async function loadPlugin({
     };
   }
   definition.initialize(registry, host);
+  await new Promise((resolve) => setImmediate(resolve));
   return { pluginId, components, translations, keybindings, modals, host };
 }
 
 const sampleReport = {
   cpu_cores: 8,
-  tasks: [{ cpu_percent: 36.2 }],
+  metrics: { cpu: { available: true, source: "tasks", core_percent: 36.2, relative_percent: 4.525 } },
 };
 
 test("uses one host Action with a localized label, CPU value, and interpolated tooltip", async () => {
@@ -129,16 +135,15 @@ test("uses one host Action with a localized label, CPU value, and interpolated t
   assert.equal(loaded.pluginId, "kandev-plugin-task-manager");
   assert.equal(registrations.length, 1);
   assert.equal(loaded.translations.length, 1);
-  assert.equal(loaded.translations[0].en.cpuActionLabel, "Task Manager CPU usage");
-  assert.match(loaded.translations[0].en.cpuActionTooltip, /\{\{percent\}\}/);
+  assert.match(loaded.translations[0].en.monitorOpen, /Task Manager/);
 
   const action = registrations[0].component({ slotProps: { presentation: "desktop" } });
   assert.equal(action.type, loaded.host.ui.Action);
-  assert.equal(action.props.label, "Task Manager CPU usage");
+  assert.match(action.props.label, /CPU: 36%/);
   assert.equal(action.props.text, "36%");
-  assert.equal(action.props.tooltip, "Open Task Manager · CPU 36% · Shortcut: ⌘/Ctrl + Shift + Esc");
+  assert.match(action.props.tooltip, /CPU: 36%.*⌘\/Ctrl \+ Shift \+ Esc/);
   assert.equal(action.props.icon.type, "svg");
-  assert.deepEqual(Object.keys(action.props).sort(), ["icon", "label", "onClick", "text", "tooltip"]);
+  assert.equal(action.props["data-testid"], "ktm-host-monitor");
 
   action.props.onClick();
   assert.equal(loaded.modals.length, 1);
@@ -154,13 +159,11 @@ test("keeps the legacy CPU meter and sizes it from nested mobile slot props", as
 
   assert.equal(registrations.length, 1);
   assert.equal(chip.type, "button");
-  assert.equal(chip.props.className, "ktm-chip");
-  assert.deepEqual(chip.props.style, { minHeight: "2.75rem", padding: "0 0.75rem" });
-  assert.equal(chip.props["aria-label"], "Task Manager CPU usage");
-  assert.equal(chip.props.title, "Open Task Manager · CPU 36% · Shortcut: ⌘/Ctrl + Shift + Esc");
-  assert.equal(chip.children.length, 3);
-  assert.equal(chip.children[0].children[0], "CPU");
-  assert.equal(chip.children[2].children[0], "36%");
+  assert.equal(chip.props.className, "ktm-monitor");
+  assert.deepEqual(chip.props.style, { minHeight: "2.75rem" });
+  assert.match(chip.props["aria-label"], /CPU: 36%/);
+  assert.match(chip.props.title, /⌘\/Ctrl \+ Shift \+ Esc/);
+  assert.equal(chip.children[0][0].children[2].children[0], "36%");
   assert.equal(loaded.translations.length, 0);
 
   chip.props.onClick();
@@ -182,5 +185,22 @@ test("keeps the legacy CPU meter when the host omits the ui namespace", async ()
 
   assert.equal(loaded.host.ui, undefined);
   assert.equal(chip.type, "button");
-  assert.equal(chip.children[2].children[0], "36%");
+  assert.equal(chip.children[0][0].children[2].children[0], "36%");
+});
+
+test("keeps rich progress segments even when host Action exists", async () => {
+  const loaded = await loadPlugin({ action: true, showBar: true, report: sampleReport });
+  const monitor = loaded.components[0].component({ slotProps: { presentation: "mobile" } });
+  assert.equal(monitor.type, "button");
+  assert.equal(monitor.props["data-main-top-bar-rich"], "true");
+  assert.deepEqual(monitor.props.style, { minHeight: "2.75rem" });
+});
+
+test("marks one-core task CPU hot while the bar keeps whole-host capacity", async () => {
+  const report = { cpu_cores: 8, metrics: { cpu: { available: true, source: "tasks", core_percent: 200, relative_percent: 25 } } };
+  const loaded = await loadPlugin({ showBar: true, report });
+  const monitor = loaded.components[0].component({ slotProps: { presentation: "desktop" } });
+  const fill = monitor.children[0][0].children[1].children[0];
+  assert.equal(fill.props.className, "ktm-fill ktm-fill-hot");
+  assert.equal(fill.props.style.width, "25%");
 });
