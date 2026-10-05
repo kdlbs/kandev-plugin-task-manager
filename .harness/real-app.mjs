@@ -8,9 +8,8 @@ const PLUGIN_ID = "kandev-plugin-task-manager";
 const CHIP_POLL_INTERVAL_MS = 4_000;
 const hostUrl = process.env.KANDEV_URL;
 const packageFile = process.env.PACKAGE_FILE;
-const hostAction = process.env.HOST_ACTION;
-if (!hostUrl || !packageFile || !["0", "1"].includes(hostAction || "")) {
-  throw new Error("Set KANDEV_URL, PACKAGE_FILE, and HOST_ACTION=0 or 1.");
+if (!hostUrl || !packageFile) {
+  throw new Error("Set KANDEV_URL and PACKAGE_FILE.");
 }
 
 const base = new URL(hostUrl);
@@ -70,6 +69,13 @@ for (const [name, target] of [["desktop", page], ["mobile", mobilePage]]) {
 }
 
 async function useSyntheticUsage(target, device) {
+  await target.route(`**/api/plugins/${PLUGIN_ID}/webhooks/summary`, async (route) => {
+    usageRequests[device] += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      sampled_at: new Date().toISOString(), refresh_interval_seconds: 1, cpu_cores: 4,
+      metrics: { cpu: { available: true, source: "tasks", core_percent: 37.5, relative_percent: 9.375 } },
+    }) });
+  });
   await target.route(`**/api/plugins/${PLUGIN_ID}/webhooks/usage`, async (route) => {
     usageRequests[device] += 1;
     await route.fulfill({
@@ -81,14 +87,11 @@ async function useSyntheticUsage(target, device) {
 }
 
 function actionButton(target) {
-  return target.getByRole("button", { name: "Task Manager CPU usage", exact: true });
+  return target.getByTestId("ktm-host-monitor");
 }
 
 function assertControlPath(target) {
-  if (hostAction === "1") {
-    return expect(target.locator('[data-slot="surface-action"][data-surface="topbar"]')).toBeVisible();
-  }
-  return expect(target.locator(".ktm-chip")).toBeVisible();
+  return expect(target.locator(".ktm-monitor")).toBeVisible();
 }
 
 try {
@@ -134,29 +137,12 @@ try {
   const desktopAction = actionButton(page);
   await expect(desktopAction).toBeVisible({ timeout: 15_000 });
   await assertControlPath(page);
-  if (hostAction === "1") {
-    await expect(desktopAction).toContainText(/\d+(?:\.\d+)?%/);
-    await expect(page.locator(".ktm-chip")).toHaveCount(0);
-    await desktopAction.hover();
-    await expect(page.getByRole("tooltip")).toContainText("CPU 38%", { timeout: 5_000 });
-    await expect(page.getByRole("tooltip")).toContainText("Shortcut:");
-  } else {
-    await expect(page.locator(".ktm-chip-track")).toBeVisible();
-    await expect(page.locator(".ktm-chip-value")).toContainText(/\d+(?:\.\d+)?%/);
-    await expect(desktopAction).toHaveAttribute("title", /CPU .*Shortcut:/);
-    await expect(page.locator('[data-slot="surface-action"][data-surface="topbar"]')).toHaveCount(0);
-  }
+  await expect(page.locator(".ktm-monitor-track")).toBeVisible();
+  await expect(page.locator(".ktm-monitor-value")).toContainText("38%");
+  await expect(desktopAction).toHaveAttribute("aria-label", /CPU: 38%/);
   const desktopBox = await desktopAction.boundingBox();
   if (!desktopBox || desktopBox.x < 0 || desktopBox.x + desktopBox.width > 1440) {
     throw new Error("The top-bar action does not fit the desktop viewport.");
-  }
-  if (hostAction === "1") {
-    const finePointer = await page.evaluate(() => matchMedia("(pointer: fine)").matches);
-    if (!finePointer || Math.abs(desktopBox.height - 28) > 0.5) {
-      throw new Error(
-        `Desktop Action is ${desktopBox.width}x${desktopBox.height}px with fine pointer=${finePointer}; expected host-owned 28px density.`,
-      );
-    }
   }
 
   await desktopAction.focus();
@@ -169,7 +155,7 @@ try {
     timeout: 10_000,
   });
   await expect.poll(() => usageRequests.desktop, { timeout: 10_000 }).toBeGreaterThan(1);
-  await page.screenshot({ path: `${outputDir}/host-${hostAction === "1" ? "action" : "legacy"}-desktop.png` });
+  await page.screenshot({ path: `${outputDir}/host-monitor-desktop.png` });
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await page.keyboard.press("Control+Shift+Escape");
@@ -204,7 +190,7 @@ try {
   if (mobileBox.x + mobileBox.width > 393 || await mobilePage.evaluate(() => document.documentElement.scrollWidth > innerWidth)) {
     throw new Error("The mobile action causes horizontal overflow.");
   }
-  await mobilePage.screenshot({ path: `${outputDir}/host-${hostAction === "1" ? "action" : "legacy"}-mobile.png` });
+  await mobilePage.screenshot({ path: `${outputDir}/host-monitor-mobile.png` });
   await mobileAction.tap();
   const mobileDialog = mobilePage.getByRole("dialog", { name: "Task Manager", exact: true });
   await expect(mobileDialog.locator(".ktm-frame")).toBeVisible();
@@ -216,7 +202,7 @@ try {
   await expect(pluginRow.getByText("Disabled", { exact: true })).toBeVisible();
   await page.goto(new URL("/tasks", base).href);
   await expect(desktopAction).toHaveCount(0);
-  await expect(page.locator(".ktm-chip")).toHaveCount(0);
+  await expect(page.locator(".ktm-monitor")).toHaveCount(0);
   const requestsWhenDisabled = usageRequests.desktop;
   await page.waitForTimeout(CHIP_POLL_INTERVAL_MS + 250);
   if (usageRequests.desktop !== requestsWhenDisabled) {
@@ -231,7 +217,7 @@ try {
   await assertControlPath(page);
   await expect.poll(() => usageRequests.desktop, { timeout: 10_000 }).toBeGreaterThan(requestsWhenDisabled);
   console.log(
-    `PASS: packaged plugin ${PLUGIN_ID}, ${hostAction === "1" ? "Action" : "legacy"} path, desktop Action ${desktopBox?.width}x${desktopBox?.height}px, Pixel 5 target ${mobileBox.width}x${mobileBox.height}px (coarse pointer), keyboard/keybinding, polling lifecycle, disable/re-enable, synthetic usage reports.`,
+    `PASS: packaged plugin ${PLUGIN_ID}, rich monitor, desktop ${desktopBox?.width}x${desktopBox?.height}px, Pixel 5 target ${mobileBox.width}x${mobileBox.height}px (coarse pointer), keyboard/keybinding, polling lifecycle, disable/re-enable, synthetic usage and summary reports.`,
   );
 } finally {
   if (installed) {

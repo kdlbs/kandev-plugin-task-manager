@@ -243,10 +243,10 @@
     poll = 0;
   };
 
-  function HarnessAction({ label, icon, text, tooltip, onClick }) {
+  function HarnessAction({ label, icon, text, tooltip, onClick, "data-testid": testId }) {
     return h(
       "button",
-      { type: "button", "aria-label": label, title: tooltip, onClick, "data-testid": "host-action" },
+      { type: "button", "aria-label": label, title: tooltip, onClick, "data-testid": testId },
       icon,
       text,
     );

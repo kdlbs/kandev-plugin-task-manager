@@ -1549,8 +1549,23 @@
       const accessibleSegments = visibleMetrics
         .map((metric) => monitorAccessibleSegment(t, locale, metric, summary.report, summary.stale))
         .filter(Boolean);
-      const mobile = props && props.presentation === "mobile";
+      const mobile = props?.slotProps?.presentation === "mobile";
       const title = interpolateMessage(t("monitorHotkeyHint"), { hotkey: HOTKEY_HINT });
+      const label = `${t("monitorOpen")}: ${accessibleSegments.join("; ")}`;
+      // Action owns compact host geometry, but its text contract cannot
+      // represent ordered rich segments or progress bars.
+      if (host.ui?.Action && visibleMetrics.length === 1 && visibleMetrics[0].id === "cpu" && !visibleMetrics[0].show_bar) {
+        const metric = visibleMetrics[0];
+        const value = monitorValue(metric, summary.report.metrics.cpu) || t("monitorUnavailable");
+        return h(host.ui.Action, {
+          label,
+          icon: cpuIcon(h),
+          text: value,
+          tooltip: `${label} · ${title}`,
+          onClick: () => openManager(),
+          "data-testid": "ktm-host-monitor",
+        });
+      }
       return h(
         MonitorButton,
         {
@@ -1563,7 +1578,7 @@
           // aria-label replaces the button's descendant text in the
           // accessibility tree. Include the ordered values and their state
           // here so a screen reader does not hear only "Open…".
-          "aria-label": `${t("monitorOpen")}: ${accessibleSegments.join("; ")}`,
+          "aria-label": label,
           title,
           // The host keeps ordinary mobile icon actions compact. This
           // contribution contains ordered values, so it opts into the rich
@@ -2549,15 +2564,6 @@
     initialize(registry, host) {
       injectStyles();
 
-      if (typeof registry.registerTranslations === "function") {
-        registry.registerTranslations({
-          en: {
-            cpuActionLabel: "Task Manager CPU usage",
-            cpuActionTooltip: "Open Task Manager · CPU {{percent}} · Shortcut: {{hotkey}}",
-          },
-        });
-      }
-
       // One modal at a time. The handle host.openModal returns carries no
       // close notification, so a modal dismissed with Esc leaves a stale
       // handle behind; closing unconditionally before opening is therefore
@@ -2578,7 +2584,7 @@
       const monitorController = createMonitorController(host);
       activeMonitorController = monitorController;
       monitorController.start();
-      registry.registerTranslations(TRANSLATIONS);
+      if (typeof registry.registerTranslations === "function") registry.registerTranslations(TRANSLATIONS);
       registry.registerKeybinding("open-task-manager", () => openManager());
       registry.registerComponent("main-top-bar", makeAmbientMonitor(host, monitorController, openManager));
       registry.registerComponent("plugin-settings", makeMonitorSettings(host, monitorController));

@@ -47,11 +47,18 @@ The default keeps the existing CPU task-per-core reading and bar. Host-relative
 CPU and task-relative CPU use a 0%-100% whole-machine scale. Task-per-core CPU
 uses 100% for one logical core and can exceed 100% for parallel work.
 
+The CPU percentage-only mode uses the host Action component when available.
+Progress bars and multiple readings use the rich monitor control.
+Older hosts use the rich control for all modes.
+
 Host monitor display choices are personal and sync through Kandev's per-user
 plugin storage. The refresh interval and disk path are administrator settings;
 they apply to all users of the installation. The refresh interval accepts any
 whole-second value from 1 through 300. A failed or unsupported reading is shown
 as unavailable instead of as zero.
+
+With Kandev authentication disabled, all browsers share the local default profile
+and its display settings. The plugin uses the host API, not a separate login.
 
 Disk monitoring reads filesystem capacity metadata for the configured path. It
 does not scan files or directories. A disk visibility threshold hides the
@@ -174,17 +181,16 @@ make test-harness
 ```
 
 For host review, build the package and upload it to an isolated local Kandev
-host. Route the usage request to synthetic data, then run the desktop and mobile
-checks. `HOST_ACTION=1` checks the Action path. `HOST_ACTION=0` checks the legacy
-path. Use a host that includes the Action API for mode `1`, or a pre-Action API v1
-host for mode `0`. Keep the host's home directory, database, and temporary files
-inside a task-owned disposable directory.
+host. The smoke test supplies synthetic usage and summary reports.
+It verifies the default rich monitor on desktop and mobile.
+The unit tests and browser harness also cover the compact host Action mode.
+Keep the home directory, database, and temporary files inside a task-owned disposable directory.
 
 ```sh
 make verify-package-host
 KANDEV_URL=http://127.0.0.1:18080 \
   PACKAGE_FILE="$(make package-file)" \
-  HOST_ACTION=1 make smoke-package
+  make smoke-package
 ```
 
 The rendered-host check covers accessible keyboard activation and the registered

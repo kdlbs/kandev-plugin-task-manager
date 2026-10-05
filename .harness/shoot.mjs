@@ -413,60 +413,36 @@ if (hops > 1) {
 
 await page.screenshot({ path: `${OUT}/07-stable.png` });
 
-// The Action path above has no .ktm-chip-value. Exercise the older-host path
-// separately so its live percentage and inherited button colour stay covered.
+// Older hosts retain the rich monitor and its independent summary cadence.
 if (!process.env.HARNESS_URL) {
   const legacyPage = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   const legacyUrl = new URL(BASE);
   legacyUrl.searchParams.set("host", "legacy");
   await legacyPage.goto(legacyUrl.href, { waitUntil: "networkidle" });
-  await legacyPage.waitForSelector(".ktm-chip-value", { timeout: 10000 });
-  await legacyPage.waitForFunction(
-    () => {
-      const text = document.querySelector(".ktm-chip-value")?.textContent || "";
-      return text !== "0%" && /^\d+(?:\.\d+)?%$/.test(text);
-    },
-    null,
-    { timeout: 10000 },
-  );
-  const firstReading = await legacyPage.evaluate(() => ({
-    text: document.querySelector(".ktm-chip-value").textContent,
-    pollCount: window.__pollCount(),
+  await legacyPage.waitForSelector(".ktm-monitor-value", { timeout: 10000 });
+  const before = await legacyPage.evaluate(() => window.__summaryFetchCount());
+  await legacyPage.evaluate(() => window.__runScheduledTimer(300000));
+  await legacyPage.waitForFunction((count) => window.__summaryFetchCount() > count, before);
+  const legacy = await legacyPage.locator("[data-testid=ktm-host-monitor]").evaluate((button) => ({
+    label: button.getAttribute("aria-label"),
+    color: getComputedStyle(button).color,
+    valueColor: getComputedStyle(button.querySelector(".ktm-monitor-value")).color,
   }));
-  await legacyPage.waitForFunction(
-    ({ previousText, previousPollCount }) => {
-      const text = document.querySelector(".ktm-chip-value")?.textContent || "";
-      return (
-        window.__pollCount() > previousPollCount &&
-        text !== "0%" &&
-        /^\d+(?:\.\d+)?%$/.test(text) &&
-        text !== previousText
-      );
-    },
-    { previousText: firstReading.text, previousPollCount: firstReading.pollCount },
-    { timeout: 10000 },
-  );
-  const legacyChip = await legacyPage.evaluate(() => {
-    const value = document.querySelector(".ktm-chip-value");
-    return {
-      text: value.innerText,
-      valueColor: getComputedStyle(value).color,
-      buttonColor: getComputedStyle(value.closest("button")).color,
-      bodyColor: getComputedStyle(document.body).color,
-    };
-  });
-  console.log("legacy chip poll/style:", JSON.stringify({ firstReading, ...legacyChip }));
-  if (
-    !/\d+(?:\.\d+)?%/.test(legacyChip.text) ||
-    legacyChip.buttonColor !== legacyChip.bodyColor ||
-    legacyChip.valueColor !== legacyChip.bodyColor
-  ) {
-    console.error("FAIL: legacy chip value is missing or does not inherit the visible foreground colour");
+  if (!legacy.label.includes("CPU") || legacy.color !== legacy.valueColor) {
+    console.error("FAIL: legacy monitor accessibility or foreground color regressed");
     process.exitCode = 1;
   }
   await legacyPage.close();
+  await page.evaluate(() => window.__notifyMonitorStorage({ version: 1, metrics: [{ id: "cpu", enabled: true, mode: "tasks_per_core", show_bar: false }] }));
+  await page.waitForFunction(() => !document.querySelector(".ktm-monitor") && Boolean(document.querySelector('[data-testid="ktm-host-monitor"]')));
+  const compact = page.locator('[data-testid="ktm-host-monitor"]');
+  if (!(await compact.getAttribute("aria-label"))?.includes("42%")) {
+    console.error("FAIL: compact Action lost the CPU value from its accessible label");
+    process.exitCode = 1;
+  }
+  await compact.screenshot({ path: `${OUT}/host-action-cpu-percentage.png` });
 }
-
 console.log("console errors:", errors.length ? errors.slice(0, 5) : "none");
+if (errors.length) process.exitCode = 1;
 await browser.close();
 if (staticServer) await staticServer.close();
