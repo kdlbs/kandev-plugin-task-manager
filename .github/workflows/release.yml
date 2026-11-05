@@ -59,25 +59,6 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Read pinned Kandev source revision
-        id: sdk
-        if: ${{ !inputs.dry_run }}
-        working-directory: plugin
-        run: |
-          set -euo pipefail
-          sdk_ref="$(cat .kandev-sdk-ref)"
-          [[ "$sdk_ref" =~ ^[0-9a-f]{40}$ ]]
-          echo "ref=$sdk_ref" >> "$GITHUB_OUTPUT"
-
-      - name: Check out Kandev SDK
-        if: ${{ !inputs.dry_run }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: kdlbs/kandev
-          path: kandev
-          ref: ${{ steps.sdk.outputs.ref }}
-          sparse-checkout: apps/backend
-
       - name: Set up Go
         if: ${{ !inputs.dry_run }}
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -176,6 +157,27 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: sh scripts/verify-release-version.sh "$TAG"
 
+      - name: Read pinned packaging-tool revision
+        id: tools
+        if: ${{ !inputs.dry_run }}
+        working-directory: plugin
+        run: |
+          set -euo pipefail
+          tools_ref="$(cat .kandev-tools-ref)"
+          [[ "$tools_ref" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$tools_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out packaging tools
+        if: ${{ !inputs.dry_run }}
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: kdlbs/kandev
+          path: kandev-packaging
+          ref: ${{ steps.tools.outputs.ref }}
+          sparse-checkout: |
+            apps/backend
+            pluginsdk
+
       - name: Run checks and verify the candidate package
         if: ${{ !inputs.dry_run }}
         working-directory: plugin
@@ -185,6 +187,7 @@ jobs:
           set -euo pipefail
           go mod tidy
           git diff --exit-code -- go.mod go.sum
+          make sdk-check
           make check-format
           make vet
           make test
@@ -227,23 +230,6 @@ jobs:
           path: plugin
           ref: ${{ github.event_name == 'push' && github.ref || needs.prepare.outputs.tag }}
 
-      - name: Read pinned Kandev source revision
-        id: sdk
-        working-directory: plugin
-        run: |
-          set -euo pipefail
-          sdk_ref="$(cat .kandev-sdk-ref)"
-          [[ "$sdk_ref" =~ ^[0-9a-f]{40}$ ]]
-          echo "ref=$sdk_ref" >> "$GITHUB_OUTPUT"
-
-      - name: Check out Kandev SDK
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: kdlbs/kandev
-          path: kandev
-          ref: ${{ steps.sdk.outputs.ref }}
-          sparse-checkout: apps/backend
-
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
@@ -255,6 +241,25 @@ jobs:
         with:
           node-version: 24
 
+      - name: Read pinned packaging-tool revision
+        id: tools
+        working-directory: plugin
+        run: |
+          set -euo pipefail
+          tools_ref="$(cat .kandev-tools-ref)"
+          [[ "$tools_ref" =~ ^[0-9a-f]{40}$ ]]
+          echo "ref=$tools_ref" >> "$GITHUB_OUTPUT"
+
+      - name: Check out packaging tools
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: kdlbs/kandev
+          path: kandev-packaging
+          ref: ${{ steps.tools.outputs.ref }}
+          sparse-checkout: |
+            apps/backend
+            pluginsdk
+
       - name: Verify release identity and package
         id: verify
         working-directory: plugin
@@ -265,6 +270,7 @@ jobs:
           sh scripts/verify-release-version.sh "$TAG"
           go mod tidy
           git diff --exit-code -- go.mod go.sum
+          make sdk-check
           make check-format
           make vet
           make test

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kandev/kandev/pkg/pluginsdk"
+	"github.com/kdlbs/kandev/pluginsdk"
 )
 
 // titleTTL is how long a task's title, identifier and state are reused before
