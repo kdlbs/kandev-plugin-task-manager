@@ -83,7 +83,7 @@ Commands run in the standalone clone:
 ```sh
 CGO_ENABLED=0 GOWORK=off make verify-package-host \
   KANDEV_TOOLS=/tmp/task-manager-migration/packaging-tools/apps/backend
-cp kandev-plugin-task-manager-0.2.0.tar.gz /tmp/task-manager-migration/standalone-host-package.tar.gz
+cp kandev-plugin-task-manager-0.2.0.tar.gz /tmp/task-manager-migration/host-package.tar.gz
 CGO_ENABLED=0 GOWORK=off make verify-package \
   KANDEV_TOOLS=/tmp/task-manager-migration/packaging-tools/apps/backend
 tar -tzf kandev-plugin-task-manager-0.2.0.tar.gz
@@ -194,3 +194,25 @@ cross-compiled and package-checked, not runtime-certified. The optional legacy U
 path has contract and stub-browser coverage; the released minimum-host browser
 smoke exercises its current Action path. No plugin release, tag, or catalog
 change was made.
+
+### Review follow-up
+
+The verifier skips blank/comment lines before detecting section boundaries and
+requires executable keys to be indented beneath `runtime.executables`. Regression
+fixtures confirmed that a top-level comment remains valid and that sibling
+platform keys beside a null executable map are rejected. Both fixtures failed
+with the previous verifier and passed after the fix.
+
+Both packaging recipes now quote their absolute staging and output paths.
+The following checks passed in a checkout whose path contains spaces:
+
+```sh
+cd '/tmp/task-manager-migration/path with spaces/plugin'
+CGO_ENABLED=0 GOWORK=off make verify-package-host verify-package \
+  KANDEV_TOOLS=/tmp/task-manager-migration/packaging-tools/apps/backend
+```
+
+The full-package check was resumed after an interrupted run and completed with
+all five executable checksums passing. `make test-package-verifier
+test-release-version` and `git diff --check` also passed. The documented host
+archive copy now uses the same filename as both subsequent smoke probes.

@@ -91,6 +91,24 @@ write_checksums "$packed_fixture"
 sh "$verify_script" "$packed_fixture" host "$host_platform" >/dev/null
 expect_failure 'a host-only manifest in a full package' "$packed_fixture" full
 
+copy_fixture runtime-comment
+awk '
+    { print }
+    $0 == "runtime:" { print "# Runtime declarations may have top-level comments." }
+' "$test_dir/runtime-comment/manifest.yaml" > "$test_dir/runtime-comment/manifest.next"
+mv "$test_dir/runtime-comment/manifest.next" "$test_dir/runtime-comment/manifest.yaml"
+write_checksums "$test_dir/runtime-comment"
+sh "$verify_script" "$test_dir/runtime-comment" full >/dev/null
+
+copy_fixture sibling-executables
+awk '
+    /^    [[:alnum:]_-]+:/ { sub(/^    /, "  ") }
+    { print }
+' "$test_dir/sibling-executables/manifest.yaml" > "$test_dir/sibling-executables/manifest.next"
+mv "$test_dir/sibling-executables/manifest.next" "$test_dir/sibling-executables/manifest.yaml"
+write_checksums "$test_dir/sibling-executables"
+expect_failure 'platform keys beside a null executables map' "$test_dir/sibling-executables"
+
 copy_fixture full-packed
 sed -e 's/^  /    /' -e 's/^      /        /' -e 's/"//g' \
     "$test_dir/full-packed/manifest.yaml" > "$test_dir/full-packed/manifest.next"

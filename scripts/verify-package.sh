@@ -20,9 +20,15 @@ for required in manifest.yaml ui/bundle.js checksums.txt; do
 done
 
 manifest_executables=$(awk '
+	/^[[:space:]]*(#|$)/ { next }
 	$0 == "runtime:" { in_runtime = 1; next }
 	in_runtime && /^[^[:space:]]/ { exit }
-	in_runtime && /^[[:space:]]+executables:$/ { in_executables = 1; next }
+	in_runtime && /^[[:space:]]+executables:$/ {
+		in_executables = 1
+		executables_indent = match($0, /[^ ]/) - 1
+		next
+	}
+	in_executables && match($0, /[^ ]/) - 1 <= executables_indent { exit }
 	in_executables && /^[[:space:]]+[[:alnum:]_-]+: / {
 		platform = $1
 		sub(/:$/, "", platform)
