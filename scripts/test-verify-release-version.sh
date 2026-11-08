@@ -71,6 +71,17 @@ package_file=$(cd "$test_dir/matching-package" && make -s package-file)
 tar -czf "$test_dir/matching-package/$package_file" -C "$test_dir/matching-package/archive" manifest.yaml
 (cd "$test_dir/matching-package" && sh "$verify_script" "v$base_version" "$package_file")
 
+make_fixture unquoted-package
+mkdir -p "$test_dir/unquoted-package/archive"
+sed 's/"//g' "$test_dir/unquoted-package/manifest.yaml" > "$test_dir/unquoted-package/archive/manifest.yaml"
+package_file=$(cd "$test_dir/unquoted-package" && make -s package-file)
+tar -czf "$test_dir/unquoted-package/$package_file" -C "$test_dir/unquoted-package/archive" manifest.yaml
+(cd "$test_dir/unquoted-package" && sh "$verify_script" "v$base_version" "$package_file")
+sed "s/^version: .*/version: $wrong_version/" "$test_dir/unquoted-package/archive/manifest.yaml" > "$test_dir/unquoted-package/archive/manifest.next"
+mv "$test_dir/unquoted-package/archive/manifest.next" "$test_dir/unquoted-package/archive/manifest.yaml"
+tar -czf "$test_dir/unquoted-package/$package_file" -C "$test_dir/unquoted-package/archive" manifest.yaml
+expect_failure 'an unquoted archive version that differs from its tag' "$test_dir/unquoted-package" "v$base_version" "$package_file"
+
 make_fixture prerelease
 set_fixture_version "$test_dir/prerelease" 0.2.0-rc.1
 (cd "$test_dir/prerelease" && sh "$verify_script" v0.2.0-rc.1)

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/kandev/kandev/pkg/pluginsdk"
+	"github.com/kdlbs/kandev/pluginsdk"
 )
 
 // The UI polls with POST rather than GET. Kandev rejects a

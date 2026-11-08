@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/kandev/kandev/pkg/pluginsdk"
+	"github.com/kdlbs/kandev/pluginsdk"
 )
 
 // taskManagerPlugin exposes a single "usage" webhook used by its own UI as a

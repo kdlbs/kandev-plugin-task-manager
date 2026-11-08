@@ -20,10 +20,16 @@ for required in manifest.yaml ui/bundle.js checksums.txt; do
 done
 
 manifest_executables=$(awk '
+	/^[[:space:]]*(#|$)/ { next }
 	$0 == "runtime:" { in_runtime = 1; next }
-	in_runtime && $0 == "  executables:" { in_executables = 1; next }
-	in_executables && $0 !~ /^    / { exit }
-	in_executables && /^    [[:alnum:]_-]+: "[^\"]+"$/ {
+	in_runtime && /^[^[:space:]]/ { exit }
+	in_runtime && /^[[:space:]]+executables:$/ {
+		in_executables = 1
+		executables_indent = match($0, /[^ ]/) - 1
+		next
+	}
+	in_executables && match($0, /[^ ]/) - 1 <= executables_indent { exit }
+	in_executables && /^[[:space:]]+[[:alnum:]_-]+: / {
 		platform = $1
 		sub(/:$/, "", platform)
 		path = $2
@@ -37,14 +43,17 @@ expected_executables=$(printf '%s\n' \
 	'linux-amd64 server/plugin-linux-amd64' \
 	'linux-arm64 server/plugin-linux-arm64' \
 	'windows-amd64 server/plugin-windows-amd64.exe' | LC_ALL=C sort)
-[ "$manifest_executables" = "$expected_executables" ] || fail 'manifest runtime.executables does not match the supported platform set'
 
 case "$mode" in
 	full)
+		[ "$manifest_executables" = "$expected_executables" ] || fail 'manifest runtime.executables does not match the supported platform set'
 		executable_paths=$(printf '%s\n' "$manifest_executables" | awk '{ print $2 }')
 		;;
 	host)
 		[ -n "$host_platform" ] || fail 'host mode requires a platform name'
+		expected_host=$(printf '%s\n' "$expected_executables" | awk -v platform="$host_platform" '$1 == platform')
+		[ -n "$expected_host" ] || fail "unsupported host platform: $host_platform"
+		[ "$manifest_executables" = "$expected_executables" ] || [ "$manifest_executables" = "$expected_host" ] || fail 'host manifest must declare the supported set or exactly the host executable'
 		executable_paths=$(printf '%s\n' "$manifest_executables" | awk -v platform="$host_platform" '$1 == platform { print $2 }')
 		[ -n "$executable_paths" ] || fail "host platform is not declared: $host_platform"
 		;;

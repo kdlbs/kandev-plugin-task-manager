@@ -42,7 +42,7 @@ if [ "$#" -eq 2 ]; then
 	expected_package=$(make -s package-file)
 	[ -f "$package_file" ] || fail "package file not found: $package_file"
 	[ "$(basename "$package_file")" = "$expected_package" ] || fail "package filename $(basename "$package_file") differs from $expected_package"
-	package_manifest=$(tar -xOzf "$package_file" manifest.yaml | sed -nE 's/^version: "([^"]+)"$/\1/p')
+	package_manifest=$(tar -xOzf "$package_file" manifest.yaml | sed -nE 's/^version: "([^"]+)"$/\1/p; s/^version: ([^"[:space:]]+)$/\1/p')
 	is_semver "$package_manifest" || fail "package manifest version is not SemVer: ${package_manifest:-missing}"
 	[ "$package_manifest" = "$tag_version" ] || fail "package manifest version ${package_manifest:-missing} differs from tag $tag"
 fi

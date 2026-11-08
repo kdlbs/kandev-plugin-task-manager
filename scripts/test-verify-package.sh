@@ -73,6 +73,49 @@ done
 write_checksums "$host_fixture"
 sh "$verify_script" "$host_fixture" host "$host_platform" >/dev/null
 
+# Current plugin-pack serializes YAML with four-space runtime indentation,
+# unquoted paths, and only the host executable for -platform-only.
+copy_fixture host-packed
+packed_fixture=$test_dir/host-packed
+rm -rf "$packed_fixture/server"
+cp -R "$host_fixture/server" "$packed_fixture/server"
+cat > "$packed_fixture/manifest.yaml" <<EOF
+id: kandev-plugin-task-manager
+runtime:
+    type: binary
+    executables:
+        $host_platform: $host_executable
+min_kandev_version: 0.99.0
+EOF
+write_checksums "$packed_fixture"
+sh "$verify_script" "$packed_fixture" host "$host_platform" >/dev/null
+expect_failure 'a host-only manifest in a full package' "$packed_fixture" full
+
+copy_fixture runtime-comment
+awk '
+    { print }
+    $0 == "runtime:" { print "# Runtime declarations may have top-level comments." }
+' "$test_dir/runtime-comment/manifest.yaml" > "$test_dir/runtime-comment/manifest.next"
+mv "$test_dir/runtime-comment/manifest.next" "$test_dir/runtime-comment/manifest.yaml"
+write_checksums "$test_dir/runtime-comment"
+sh "$verify_script" "$test_dir/runtime-comment" full >/dev/null
+
+copy_fixture sibling-executables
+awk '
+    /^    [[:alnum:]_-]+:/ { sub(/^    /, "  ") }
+    { print }
+' "$test_dir/sibling-executables/manifest.yaml" > "$test_dir/sibling-executables/manifest.next"
+mv "$test_dir/sibling-executables/manifest.next" "$test_dir/sibling-executables/manifest.yaml"
+write_checksums "$test_dir/sibling-executables"
+expect_failure 'platform keys beside a null executables map' "$test_dir/sibling-executables"
+
+copy_fixture full-packed
+sed -e 's/^  /    /' -e 's/^      /        /' -e 's/"//g' \
+    "$test_dir/full-packed/manifest.yaml" > "$test_dir/full-packed/manifest.next"
+mv "$test_dir/full-packed/manifest.next" "$test_dir/full-packed/manifest.yaml"
+write_checksums "$test_dir/full-packed"
+sh "$verify_script" "$test_dir/full-packed" full >/dev/null
+
 for required in manifest.yaml ui/bundle.js \
 	server/plugin-linux-amd64 server/plugin-linux-arm64 \
 	server/plugin-darwin-amd64 server/plugin-darwin-arm64 \
@@ -136,5 +179,6 @@ awk '
 mv "$test_dir/extra-platform/manifest.next" "$test_dir/extra-platform/manifest.yaml"
 write_checksums "$test_dir/extra-platform"
 expect_failure 'an unexpected declared platform' "$test_dir/extra-platform"
+expect_failure 'an unexpected declared platform in host mode' "$test_dir/extra-platform" host "$host_platform"
 
 printf 'package verifier negative tests passed\n'

@@ -89,9 +89,9 @@ panel.
 
 The plugin requests `api_read: tasks` to show task titles. Its usage webhook
 requires an authenticated host session. The manifest keeps plugin API v1 and
-does not set `min_kandev_version`. A host with `host.ui.Action` shows a CPU
-icon and percentage. An older compatible host keeps the current chip and its
-meter.
+sets `min_kandev_version: "0.99.0"` from the published SDK 0.1.0 release
+record. A host with `host.ui.Action` shows a CPU icon and percentage. The
+legacy chip and meter remain available when that optional UI API is absent.
 
 ![The panel open over the Kanban board, with the CPU chip in the top bar](docs/media/in-app.png)
 
@@ -113,19 +113,42 @@ hour ago as busy now.
 Use Go 1.26 and Node.js 24. The UI is plain JavaScript. Node's built-in test
 runner checks its host Action and legacy paths.
 
-Clone the Kandev SDK beside this repository at the pinned source revision:
+The backend pins the public `github.com/kdlbs/kandev/pluginsdk v0.1.0`
+module. SDK versions are independent of this plugin's version. Compilation,
+tests, and SDK compatibility checks need no Kandev checkout:
 
 ```sh
-git clone https://github.com/kdlbs/kandev.git ../kandev
-git -C ../kandev checkout "$(cat .kandev-sdk-ref)"
+go mod download
+make sdk-check
 ```
 
-The Go SDK is not a separate module. `go.mod` reads it from
-`../kandev/apps/backend`. The source pin is not a minimum host version.
+The checker reads the installed Go SDK's `sdk-release.json`; SDK 0.1.0 supports
+manifest API versions 1 and 2 and requires Kandev 0.99.0 or newer. Keep exact
+pins. For an upgrade, install the chosen public version, regenerate `go.sum`,
+update the checker version and host floor from its release record, then rerun
+checks and smoke-test the declared minimum host. The shipped UI is hand-written
+JavaScript with no frontend SDK dependency or typecheck step. The browser
+harness's npm lockfile contains only test tooling and React for its stub host.
+
+Packaging still uses backend-owned `plugin-pack` from a separate, pinned source
+checkout. This is a packaging input, not an SDK dependency. Include both source
+directories because the backend itself replaces its SDK with `../../pluginsdk`:
+
+```sh
+git clone --filter=blob:none --no-checkout https://github.com/kdlbs/kandev.git ../kandev-packaging
+git -C ../kandev-packaging sparse-checkout set apps/backend pluginsdk
+git -C ../kandev-packaging checkout "$(cat .kandev-tools-ref)"
+```
+
+`KANDEV_TOOLS` defaults to `../kandev-packaging/apps/backend`. Override it for
+another checkout of that pinned revision, for example
+`make verify-package-host KANDEV_TOOLS=/path/to/kandev-packaging/apps/backend`.
+CI retains this packaging-only checkout. Packaging is not checkout-free.
 
 Run the main checks and builds from this directory:
 
 ```sh
+make sdk-check
 make check-format
 make vet
 make test
@@ -170,8 +193,9 @@ KANDEV_URL=http://127.0.0.1:18080 \
 The rendered-host check covers accessible keyboard activation and the registered
 shortcut, mobile touch size and fit, usage polling, and disable/re-enable
 behavior. It validates only the selected package and host version; the layout
-fixture alone does not certify host compatibility. This repository does not set
-a minimum host version.
+fixture alone does not certify host compatibility. The declared minimum host
+is Kandev 0.99.0. See [SDK migration validation](docs/sdk-migration-validation.md)
+for the migration evidence and any limitations.
 
 The live process diagnostic is optional. It samples the machine where it runs:
 
